@@ -1,0 +1,25 @@
+{
+  "name": "localcode-intelligence",
+  "version": "0.1.0",
+  "description": "Local-first source repository investigation CLI",
+  "type": "module",
+  "bin": {
+    "localcode": "dist/src/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test dist/test/**/*.test.js",
+    "localcode": "npm run build --silent && node dist/src/cli.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  }
+}
