@@ -52,7 +52,7 @@ export function assessRelevance(query: string, candidates: readonly SearchCandid
   const evidence = new Set(candidates.flatMap(candidate => words(`${candidate.filePath} ${candidate.text}`).map(stem)));
   const meaningful = [...new Set(terms.filter(term => term.length > 2))];
   const matched = meaningful.filter(term => evidence.has(term));
-  const navigationIntent = /\\b(?:where|find|locate|show|which|how)\\b/i.test(query);
+  const navigationIntent = /\b(?:where|find|locate|show|which|how)\b/i.test(query);
 
   // A single accidental word from a multi-concept query (e.g. "quantum
   // entanglement teleportation algorithm") is not positive relevance evidence.
