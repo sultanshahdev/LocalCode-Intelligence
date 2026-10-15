@@ -40,6 +40,21 @@ test('keeps an exact identifier visible when its cosine similarity is negative',
   }
 });
 
+test('does not surface incidental lexical overlap for an unrelated multi-term query', async () => {
+  const result = await searchRepository('quantum entanglement teleportation algorithm', '/repo', {
+    prepare: async () => ({
+      filesProcessed: 1, warnings: [],
+      regions: [{ filePath: 'lib/utils.js', startLine: 1, endLine: 1, text: 'export const algorithm = new Map();' }],
+    }),
+    createEmbedder: async () => ({ embed: async () => [[1, 0], [1, 0]] }),
+  });
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.equal(result.outcome, 'no-relevant-results');
+    assert.deepEqual(result.candidates, []);
+  }
+});
+
 test('retains weak positive alignment as explicitly uncertain inspectable evidence', async () => {
   const result = await searchRepository('query', '/repo', {
     prepare: async () => scope,
