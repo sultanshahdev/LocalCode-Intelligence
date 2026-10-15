@@ -64,7 +64,7 @@ export interface BenchmarkMetrics {
   negativeQueries: number;
   recallAt1: number;
   recallAt5: number;
-  mrrAt10: number;
+  mrrAt5: number;
   falseNegativeRate: number;
   falsePositiveRate: number;
   correctAbstentionRate: number;
@@ -285,7 +285,7 @@ export async function runBenchmark(config: PipelineConfig, embedder: Embedder, m
     negativeQueries: negativeResults.length,
     recallAt1: meanR1,
     recallAt5: meanR5,
-    mrrAt10: meanMrr,
+    mrrAt5: meanMrr,
     falseNegativeRate: fnRate,
     falsePositiveRate: fpRate,
     correctAbstentionRate: abstainRate,
@@ -335,7 +335,7 @@ async function main() {
   console.log('---------------------------|---------------|----------------|-----------------');
   console.log(`Recall@1                   | ${(allMetrics['semantic-only']!.recallAt1 * 100).toFixed(1).padStart(11)}%  | ${(allMetrics['earlier-hybrid']!.recallAt1 * 100).toFixed(1).padStart(12)}%  | ${(allMetrics['corrected-hybrid']!.recallAt1 * 100).toFixed(1).padStart(14)}%`);
   console.log(`Recall@5                   | ${(allMetrics['semantic-only']!.recallAt5 * 100).toFixed(1).padStart(11)}%  | ${(allMetrics['earlier-hybrid']!.recallAt5 * 100).toFixed(1).padStart(12)}%  | ${(allMetrics['corrected-hybrid']!.recallAt5 * 100).toFixed(1).padStart(14)}%`);
-  console.log(`MRR@10                     | ${allMetrics['semantic-only']!.mrrAt10.toFixed(3).padStart(13)} | ${allMetrics['earlier-hybrid']!.mrrAt10.toFixed(3).padStart(14)} | ${allMetrics['corrected-hybrid']!.mrrAt10.toFixed(3).padStart(16)}`);
+  console.log(`MRR@5                     | ${allMetrics['semantic-only']!.mrrAt5.toFixed(3).padStart(13)} | ${allMetrics['earlier-hybrid']!.mrrAt5.toFixed(3).padStart(14)} | ${allMetrics['corrected-hybrid']!.mrrAt5.toFixed(3).padStart(16)}`);
   console.log(`False Negative Rate (pos)  | ${(allMetrics['semantic-only']!.falseNegativeRate * 100).toFixed(1).padStart(11)}%  | ${(allMetrics['earlier-hybrid']!.falseNegativeRate * 100).toFixed(1).padStart(12)}%  | ${(allMetrics['corrected-hybrid']!.falseNegativeRate * 100).toFixed(1).padStart(14)}%`);
   console.log(`False Positive Rate (neg)  | ${(allMetrics['semantic-only']!.falsePositiveRate * 100).toFixed(1).padStart(11)}%  | ${(allMetrics['earlier-hybrid']!.falsePositiveRate * 100).toFixed(1).padStart(12)}%  | ${(allMetrics['corrected-hybrid']!.falsePositiveRate * 100).toFixed(1).padStart(14)}%`);
   console.log(`Correct Abstention (neg)   | ${(allMetrics['semantic-only']!.correctAbstentionRate * 100).toFixed(1).padStart(11)}%  | ${(allMetrics['earlier-hybrid']!.correctAbstentionRate * 100).toFixed(1).padStart(12)}%  | ${(allMetrics['corrected-hybrid']!.correctAbstentionRate * 100).toFixed(1).padStart(14)}%`);
