@@ -306,7 +306,7 @@ async function handleRepoStatus(req: IncomingMessage, res: ServerResponse): Prom
   sendJson(res, 200, { ok: true, resolvedPath: validation.resolvedPath, status: result.status });
 }
 
-async function handleSearch(req: IncomingMessage, res: ServerResponse): Promise<void> {
+async function handleSearch(req: IncomingMessage, res: ServerResponse, performSearch: typeof searchRepository = searchRepository): Promise<void> {
   if (!requiresJson(req, res)) return;
   let body: unknown;
   try {
@@ -343,16 +343,17 @@ async function handleSearch(req: IncomingMessage, res: ServerResponse): Promise<
   res.once('close', abort);
   let result;
   try {
-    result = await searchController.execute(() => searchRepository(query.trim(), validation.resolvedPath, {
+    result = await searchController.execute(() => performSearch(query.trim(), validation.resolvedPath, {
       prepare: prepareSourceScope,
       createEmbedder: getEmbedder,
     }), abortController.signal);
   } catch (error: unknown) {
+    if (abortController.signal.aborted || res.destroyed) return;
     if (error instanceof SearchOverloadedError) {
       sendError(res, 503, error.message, { 'Retry-After': '5' });
       return;
     }
-    if (error instanceof SearchQueueAbortedError || req.destroyed || res.destroyed) return;
+    if (error instanceof SearchQueueAbortedError) return;
     sendError(res, 500, 'Search could not be scheduled.');
     return;
   } finally {
@@ -360,7 +361,9 @@ async function handleSearch(req: IncomingMessage, res: ServerResponse): Promise<
     res.removeListener('close', abort);
   }
 
-  if (req.destroyed || res.destroyed) return;
+  // IncomingMessage.destroyed can become true after a normal, fully-read request body.
+  // Only the response lifecycle (or our abort signal) tells us whether replying is safe.
+  if (abortController.signal.aborted || res.destroyed) return;
 
   if (!result.ok) {
     sendJson(res, 200, { ok: false, reason: result.reason, message: result.message });
@@ -502,7 +505,7 @@ async function serveStatic(req: IncomingMessage, res: ServerResponse): Promise<b
 }
 
 // ── Main router ───────────────────────────────────────────────────────────────
-async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+async function handleRequest(req: IncomingMessage, res: ServerResponse, performSearch: typeof searchRepository = searchRepository): Promise<void> {
   setCorsHeaders(res, req);
 
   if (req.method === 'OPTIONS') {
@@ -528,7 +531,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       return;
     }
     if (req.method === 'POST' && url === '/api/search') {
-      await handleSearch(req, res);
+      await handleSearch(req, res, performSearch);
       return;
     }
     if (req.method === 'POST' && url === '/api/source') {
@@ -554,8 +557,9 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
 }
 
 // ── Start ─────────────────────────────────────────────────────────────────────
-export function createLocalcodeServer() {
-  return createServer(handleRequest);
+/** Optional search injection enables realistic HTTP contract tests without loading the ML model. */
+export function createLocalcodeServer(options: { performSearch?: typeof searchRepository } = {}) {
+  return createServer((req, res) => handleRequest(req, res, options.performSearch ?? searchRepository));
 }
 
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
