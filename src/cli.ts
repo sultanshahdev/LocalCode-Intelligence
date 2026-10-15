@@ -128,14 +128,26 @@ async function runSearch(
   for (const warning of result.scope.warnings) streams.stdout.write(`Warning: ${warning}\n`);
   streams.stdout.write('\n');
 
+  if (result.outcome === 'no-supported-candidate') {
+    streams.stdout.write('Outcome: No sufficiently supported candidate was found under the display rule.\n');
+    streams.stdout.write('The search completed, but no retrieved region had positive cosine alignment.\n');
+    streams.stdout.write(`Withheld candidates: ${result.withheldCandidates} with non-positive cosine alignment.\n`);
+    streams.stdout.write('This does not establish that the requested behavior is absent from the repository.\n');
+    return 0;
+  }
+
   result.candidates.forEach((candidate, index) => {
     streams.stdout.write(`Candidate ${index + 1}\n`);
     streams.stdout.write(`File: ${candidate.filePath}\n`);
     streams.stdout.write(`Lines: ${candidate.startLine}-${candidate.endLine}\n`);
     streams.stdout.write(`Similarity: ${candidate.score.toFixed(4)}\n\n`);
+    streams.stdout.write('Evidence: Unverified semantic candidate; relevance is uncertain.\n\n');
     streams.stdout.write(`Candidate source excerpt:\n${candidate.text}\n\n`);
   });
-  streams.stdout.write('Note: Matches are candidates for inspection, not verified behavioral guarantees.\n');
+  if (result.withheldCandidates > 0) {
+    streams.stdout.write(`Withheld candidates: ${result.withheldCandidates} with non-positive cosine alignment.\n`);
+  }
+  streams.stdout.write('Note: Similarity is a ranking signal, not a probability or verified behavioral guarantee.\n');
   return 0;
 }
 

@@ -107,6 +107,8 @@ test('search validates a natural-language query and formats inspectable evidence
   let received: { query: string; repository: string } | undefined;
   const searchResult: SearchResult = {
     ok: true,
+    outcome: 'candidates',
+    withheldCandidates: 0,
     scope: { filesProcessed: 1, warnings: [], regions: [] },
     candidates: [{
       filePath: 'src/session.ts', startLine: 4, endLine: 6,
@@ -127,7 +129,7 @@ test('search validates a natural-language query and formats inspectable evidence
   assert.deepEqual(received, { query: 'where is an expired session rejected?', repository: directory });
   assert.match(output.stdout(), /File: src\/session\.ts/);
   assert.match(output.stdout(), /Lines: 4-6/);
-  assert.match(output.stdout(), /not verified behavioral guarantees/);
+  assert.match(output.stdout(), /not a probability or verified behavioral guarantee/);
   assert.equal(output.stderr(), '');
 });
 
@@ -152,13 +154,60 @@ test('search accepts a relative non-Git path containing spaces', async () => {
   process.chdir(parent);
   try {
     const exitCode = await invokeCli(['search', 'find behavior', '--repo', relativePath], output.streams, {
-      search: async () => ({ ok: true, scope: { filesProcessed: 1, warnings: [], regions: [] }, candidates: [] }),
+      search: async () => ({ ok: true, outcome: 'no-supported-candidate', withheldCandidates: 0, scope: { filesProcessed: 1, warnings: [], regions: [] }, candidates: [] }),
     });
     assert.equal(exitCode, 0);
     assert.match(output.stdout(), new RegExp(escapeRegex(join(parent, relativePath))));
   } finally {
     process.chdir(originalDirectory);
   }
+});
+
+test('search labels weak candidates as uncertain and preserves source locations', async () => {
+  const directory = await createFixture();
+  const output = captureStreams();
+  const exitCode = await invokeCli(['search', 'uncertain behavior', '--repo', directory], output.streams, {
+    search: async () => ({
+      ok: true,
+      outcome: 'candidates',
+      withheldCandidates: 1,
+      scope: { filesProcessed: 1, warnings: ['File limit reached; coverage is incomplete.'], regions: [] },
+      candidates: [{ filePath: 'src/weak.ts', startLine: 8, endLine: 12, text: 'maybeRelated();', score: 0.01 }],
+    }),
+  });
+  assert.equal(exitCode, 0);
+  assert.match(output.stdout(), /Warning: File limit reached; coverage is incomplete/);
+  assert.match(output.stdout(), /File: src\/weak\.ts/);
+  assert.match(output.stdout(), /Lines: 8-12/);
+  assert.match(output.stdout(), /relevance is uncertain/);
+  assert.match(output.stdout(), /not a probability/);
+  assert.match(output.stdout(), /Withheld candidates: 1/);
+});
+
+test('search distinguishes no supported candidate from operational failure', async () => {
+  const directory = await createFixture();
+  const noResultOutput = captureStreams();
+  const noResultExit = await invokeCli(['search', 'absent evidence', '--repo', directory], noResultOutput.streams, {
+    search: async () => ({
+      ok: true,
+      outcome: 'no-supported-candidate',
+      withheldCandidates: 2,
+      scope: { filesProcessed: 1, warnings: [], regions: [] },
+      candidates: [],
+    }),
+  });
+  assert.equal(noResultExit, 0);
+  assert.match(noResultOutput.stdout(), /No sufficiently supported candidate/);
+  assert.match(noResultOutput.stdout(), /does not establish.*absent/i);
+  assert.equal(noResultOutput.stderr(), '');
+
+  const failureOutput = captureStreams();
+  const failureExit = await invokeCli(['search', 'failed search', '--repo', directory], failureOutput.streams, {
+    search: async () => ({ ok: false, reason: 'processing-failed', message: 'Search processing failed.' }),
+  });
+  assert.equal(failureExit, 1);
+  assert.equal(failureOutput.stdout(), '');
+  assert.match(failureOutput.stderr(), /Search processing failed/);
 });
 
 function captureStreams() {

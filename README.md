@@ -51,7 +51,17 @@ the lockfile and covered by the real-model integration test.
 Search results include the relative file path, exact one-based line range,
 cosine similarity score, and actual source excerpt. Similarity orders candidates
 for inspection; it is not proof that a candidate implements the requested behavior.
-Git metadata is not required.
+Every displayed match is labeled as unverified and uncertain. A score is a ranking
+signal, not a probability of correctness. Git metadata is not required.
+
+LocalCode displays only retrieved candidates with positive cosine alignment. Zero
+is used as a mathematical display floor: zero or negative alignment means the
+vectors are orthogonal or point in opposing directions. This is not a calibrated
+relevance threshold, and even a positive score can be unrelated. When every
+retrieved candidate is non-positive, the command reports a successful search with
+no sufficiently supported candidate and explicitly avoids claiming that the
+behavior is absent. Model or processing failures remain errors, and source-coverage
+warnings remain visible for both candidate and no-candidate outcomes.
 
 ## Check repository search readiness
 

@@ -1,9 +1,21 @@
-import { createLocalEmbedder, retrieveCandidates, type Embedder, type SearchCandidate } from './retrieval.js';
+import {
+  createLocalEmbedder,
+  retrieveCandidates,
+  selectDisplayCandidates,
+  type Embedder,
+  type SearchCandidate,
+} from './retrieval.js';
 import { prepareSourceScope, type SourceScope } from './source.js';
 
 export type SearchFailureReason = 'unsupported-source-scope' | 'processing-failed';
 export type SearchResult =
-  | { ok: true; candidates: SearchCandidate[]; scope: SourceScope }
+  | {
+      ok: true;
+      outcome: 'candidates' | 'no-supported-candidate';
+      candidates: SearchCandidate[];
+      withheldCandidates: number;
+      scope: SourceScope;
+    }
   | { ok: false; reason: SearchFailureReason; message: string };
 
 export interface SearchDependencies {
@@ -36,8 +48,15 @@ export async function searchRepository(
 
   try {
     const embedder = await dependencies.createEmbedder();
-    const candidates = await retrieveCandidates(query, scope.regions, embedder);
-    return { ok: true, candidates, scope };
+    const retrieved = await retrieveCandidates(query, scope.regions, embedder);
+    const selection = selectDisplayCandidates(retrieved);
+    return {
+      ok: true,
+      outcome: selection.candidates.length > 0 ? 'candidates' : 'no-supported-candidate',
+      candidates: selection.candidates,
+      withheldCandidates: selection.withheldCount,
+      scope,
+    };
   } catch (error: unknown) {
     return failure('processing-failed', `Search could not complete retrieval: ${errorMessage(error)}. This does not mean relevant code is absent.`);
   }
