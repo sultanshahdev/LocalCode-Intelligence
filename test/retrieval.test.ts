@@ -53,6 +53,80 @@ test('qualified symbol queries prefer implementations over example calls', async
   assert.notEqual(incidental[0]?.evidenceClass, 'exact-identifier');
 });
 
+test('anonymous default-export implementation beats a named importer for a basename query', async () => {
+  const regions = [
+    { filePath: 'lib/core/HeaderCollection.js', startLine: 1, endLine: 3,
+      text: "import parseResponseHeaders from '../helpers/parseResponseHeaders.js'; export const use = () => parseResponseHeaders('');" },
+    { filePath: 'lib/helpers/parseResponseHeaders.js', startLine: 1, endLine: 5,
+      text: "export default (rawHeaders) => { if (!rawHeaders) return {}; return { rawHeaders }; }" },
+  ];
+  const query = 'parseResponseHeaders';
+  const embedder: Embedder = { embed: async () => [[1, 0], [1, 0], [1, 0]] };
+  assert.equal((await retrieveHybridCandidates(query, regions, embedder))[0]?.filePath, 'lib/helpers/parseResponseHeaders.js');
+});
+
+test('CommonJS require aliases are references, not function definitions', async () => {
+  const regions = [
+    { filePath: 'lib/fallback.js', startLine: 1, endLine: 6,
+      text: "const Response = require('./response'); function fallback() { return new Response(); }" },
+    { filePath: 'lib/response.js', startLine: 1, endLine: 6,
+      text: 'function Response(raw) { this.raw = raw; } module.exports = Response;' },
+  ];
+  const embedder: Embedder = { embed: async () => [[1, 0], [1, 0], [1, 0]] };
+  assert.equal((await retrieveHybridCandidates('Response', regions, embedder))[0]?.filePath, 'lib/response.js');
+});
+
+test('named Symbol object properties are definitions rather than imported references', async () => {
+  const regions = [
+    { filePath: 'lib/handler.js', startLine: 1, endLine: 4,
+      text: "const {kRouteState} = require('./symbols'); function run(request) { return request[kRouteState]; }" },
+    { filePath: 'lib/symbols.js', startLine: 1, endLine: 3,
+      text: "const keys = { kRouteState: Symbol('server.routeState') }; module.exports = keys;" },
+  ];
+  const embedder: Embedder = { embed: async () => [[1, 0], [1, 0], [1, 0]] };
+  assert.equal((await retrieveHybridCandidates('kRouteState', regions, embedder))[0]?.filePath, 'lib/symbols.js');
+});
+
+test('behavioral implementation intent ranks defining logic above an incidental test', async () => {
+  const regions = [
+    { filePath: 'test/reliability.test.ts', startLine: 1, endLine: 4, text: "test('search concurrency is bounded', () => expect(controller).toBeDefined());" },
+    { filePath: 'src/search-execution.ts', startLine: 10, endLine: 18, text: 'export class SearchExecutionController { async run() { if (this.active >= this.maximum) return; await this.execute(); } }' },
+  ];
+  const result = await retrieveHybridCandidates('Where is search concurrency bounded to prevent overload?', regions, {
+    embed: async () => [[1, 0], [1, 0], [1, 0]],
+  });
+  assert.equal(result[0]?.filePath, 'src/search-execution.ts');
+});
+
+test('benchmark can compare merged ranking with intent-aware ranking using identical vectors', async () => {
+  const regions = [
+    { filePath: 'src/concurrency-notes.ts', startLine: 1, endLine: 2,
+      text: '// Where search concurrency is bounded to prevent overload' },
+    { filePath: 'src/unrelated-handler.ts', startLine: 1, endLine: 3,
+      text: 'export function calculatePrice() { if (true) return 42; }' },
+  ];
+  const embedder = { embed: async () => [[1, 0], [1, 0], [0, 1]] };
+  const query = 'Where is search concurrency bounded to prevent overload?';
+
+  const mergedBaseline = await retrieveHybridCandidates(query, regions, embedder, 5, { intentReranking: false });
+  const proposal = await retrieveHybridCandidates(query, regions, embedder);
+  assert.equal(mergedBaseline[0]?.filePath, 'src/concurrency-notes.ts');
+  assert.equal(proposal[0]?.filePath, 'src/concurrency-notes.ts');
+  // Unrelated executable structure is insufficient without query evidence.
+  // The merged-baseline option remains available for measured comparisons.
+});
+
+test('explicit test and example intents retain their matching file roles', async () => {
+  const regions = [
+    { filePath: 'src/validation.ts', startLine: 1, endLine: 3, text: 'export function validateRequest() { if (!request) throw new Error(); }' },
+    { filePath: 'test/validation.test.ts', startLine: 1, endLine: 3, text: "test('request validation', () => expect(validateRequest).toThrow());" },
+    { filePath: 'examples/request.ts', startLine: 1, endLine: 2, text: 'validateRequest(request);' },
+  ];
+  const embedder = { embed: async () => [[1, 0], [1, 0], [1, 0], [1, 0]] };
+  assert.equal((await retrieveHybridCandidates('Where is request validation tested?', regions, embedder))[0]?.filePath, 'test/validation.test.ts');
+  assert.equal((await retrieveHybridCandidates('Show an example of request validation', regions, embedder))[0]?.filePath, 'examples/request.ts');
+});
+
 test('rejects malformed vectors instead of fabricating a score', () => {
   assert.throws(() => cosineSimilarity([1], [1, 2]), /same non-zero length/);
 });
