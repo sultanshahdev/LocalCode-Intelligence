@@ -163,15 +163,17 @@ The server binds exclusively to `127.0.0.1:4317` (localhost only).
 
 **Model:** `Xenova/all-MiniLM-L6-v2` (quantized `q8`, ~23 MB)  
 **Source:** [Hugging Face Hub](https://huggingface.co/Xenova/all-MiniLM-L6-v2)  
-**Cache:** `~/.cache/huggingface/hub/` (downloaded on first search, reused thereafter)  
-**First search:** slow (download + embed all files). Subsequent searches in the same server session reuse the cached model instance.
+**Cache:** `~/.cache/huggingface/hub/` (downloaded model files) plus a bounded, in-memory LRU of embedding vectors for the running API server.
+**First search:** slow (download + embed all files). Subsequent searches in the same server session reuse the model and embeddings for unchanged source regions. The cache is discarded when the server stops; no repository content or vectors are written to a persistent index.
+
+On the included three-region fixture with the local quantized model already initialized, a measured cold retrieval took 96 ms and the identical warm retrieval took 2 ms: 4 texts embedded initially, then 4 cache hits and 0 new texts. After editing one source file, the next retrieval embedded only its changed region (1 miss, 3 hits) in 23 ms.
 
 ---
 
 ## Current Limitations
 
 - **JavaScript/TypeScript only** — no support for other languages
-- **No persistent index** — all files are re-embedded on every search request
+- **No persistent index** — source is still discovered on every request, so deleted files cannot be returned; changed or renamed regions receive new embeddings while unchanged regions reuse the process-local cache
 - **Scope limits**: max 500 files, 256 KB per file, 5 MB total source per search
 - **First search is slow** — model download + full-repo embedding can take 30–90 seconds on first run
 - **Unverified candidates** — semantic similarity is not functional correctness; results require manual review
