@@ -53,6 +53,40 @@ test('qualified symbol queries prefer implementations over example calls', async
   assert.notEqual(incidental[0]?.evidenceClass, 'exact-identifier');
 });
 
+test('anonymous default-export implementation beats a named importer for a basename query', async () => {
+  const regions = [
+    { filePath: 'lib/core/HeaderCollection.js', startLine: 1, endLine: 3,
+      text: "import parseResponseHeaders from '../helpers/parseResponseHeaders.js'; export const use = () => parseResponseHeaders('');" },
+    { filePath: 'lib/helpers/parseResponseHeaders.js', startLine: 1, endLine: 5,
+      text: "export default (rawHeaders) => { if (!rawHeaders) return {}; return { rawHeaders }; }" },
+  ];
+  const query = 'parseResponseHeaders';
+  const embedder: Embedder = { embed: async () => [[1, 0], [1, 0], [1, 0]] };
+  assert.equal((await retrieveHybridCandidates(query, regions, embedder))[0]?.filePath, 'lib/helpers/parseResponseHeaders.js');
+});
+
+test('CommonJS require aliases are references, not function definitions', async () => {
+  const regions = [
+    { filePath: 'lib/fallback.js', startLine: 1, endLine: 6,
+      text: "const Response = require('./response'); function fallback() { return new Response(); }" },
+    { filePath: 'lib/response.js', startLine: 1, endLine: 6,
+      text: 'function Response(raw) { this.raw = raw; } module.exports = Response;' },
+  ];
+  const embedder: Embedder = { embed: async () => [[1, 0], [1, 0], [1, 0]] };
+  assert.equal((await retrieveHybridCandidates('Response', regions, embedder))[0]?.filePath, 'lib/response.js');
+});
+
+test('named Symbol object properties are definitions rather than imported references', async () => {
+  const regions = [
+    { filePath: 'lib/handler.js', startLine: 1, endLine: 4,
+      text: "const {kRouteState} = require('./symbols'); function run(request) { return request[kRouteState]; }" },
+    { filePath: 'lib/symbols.js', startLine: 1, endLine: 3,
+      text: "const keys = { kRouteState: Symbol('server.routeState') }; module.exports = keys;" },
+  ];
+  const embedder: Embedder = { embed: async () => [[1, 0], [1, 0], [1, 0]] };
+  assert.equal((await retrieveHybridCandidates('kRouteState', regions, embedder))[0]?.filePath, 'lib/symbols.js');
+});
+
 test('behavioral implementation intent ranks defining logic above an incidental test', async () => {
   const regions = [
     { filePath: 'test/reliability.test.ts', startLine: 1, endLine: 4, text: "test('search concurrency is bounded', () => expect(controller).toBeDefined());" },
