@@ -46,3 +46,47 @@ defining context falls outside a retrieved source window. Search remains
 bounded by source discovery limits and only the fused candidate pool can be
 reranked. A result is evidence to inspect, not proof that no other
 implementation exists.
+
+
+## Four-repository evaluation (at PR revision b24126f)
+
+The user ran 4 separate evaluation-split benchmarks at pinned source
+revisions. All metrics below use **file-level** labels, not verified
+function/line-level matches.
+
+| Repository | Positive / negative | Baseline R@1 | Intent-aware R@1 | Baseline R@5 | Intent-aware R@5 |
+|---|---:|---:|---:|---:|---:|
+| LocalCode | 6 / 1 | 5/6 | 6/6 | 6/6 | 6/6 |
+| Express | 5 / 1 | 5/5 | 5/5 | 5/5 | 5/5 |
+| Axios | 6 / 1 | 5/6 | 5/6 | 5/6 | 5/6 |
+| Fastify | 6 / 1 | 2/6 | 4/6 | 4/6 | 5/6 |
+| **Pooled** | **23 / 4** | **17/23 (73.9%)** | **20/23 (87.0%)** | **20/23 (87.0%)** | **21/23 (91.3%)** |
+
+Both configurations correctly abstained on the 4 negative queries.
+Pooled MRR@5 was 0.804 baseline versus 0.884 intent-aware.
+The Fastify Reply query moved from false negative to within the top
+five; Fastify wrapThenable and hooks and LocalCode concurrency improved
+rank. No observed regression on this small evaluation slice.
+
+Embedding precomputation took 16s for LocalCode, 74s for Express,
+226s for Axios, and 317s for Fastify. RSS snapshots were around
+1.1-1.4 GiB, not peak process memory. Warm per-query latency
+does not include indexing.
+
+### Subsequent changes require independent re-evaluation
+
+At revision b24126f, the Axios parseHeaders implementation (an
+anonymous default export) was missed in favor of an importer.
+Fastify kRouteContext is defined as a Symbol object-property key
+but references were ranked higher. Fastify Reply had a competing
+CommonJS require alias in another file.
+
+Experimental fixes were subsequently added to the same feature branch
+to recognize these patterns and suppress structural promotion without
+query evidence. **The metrics above do not apply to those later edits.**
+Passing tests and CI does not establish new real-model performance.
+
+Since the evaluation cases were used to guide these fixes, they are
+now development regression cases, not untouched held-out data.
+A future release-grade report should test fresh, independently
+labeled implementation-level and negative cases.
