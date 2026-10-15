@@ -10,6 +10,22 @@ export interface SearchCandidate extends SourceRegion {
   score: number;
 }
 
+export interface CandidateDisplaySelection {
+  candidates: SearchCandidate[];
+  withheldCount: number;
+}
+
+/**
+ * Keeps only candidates with positive vector alignment. This is a display floor,
+ * not a relevance or confidence threshold: every retained candidate is unverified.
+ */
+export function selectDisplayCandidates(
+  candidates: readonly SearchCandidate[],
+): CandidateDisplaySelection {
+  const displayed = candidates.filter(candidate => candidate.score > 0);
+  return { candidates: displayed, withheldCount: candidates.length - displayed.length };
+}
+
 export async function retrieveCandidates(
   query: string,
   regions: readonly SourceRegion[],

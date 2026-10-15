@@ -16,7 +16,37 @@ test('returns real region metadata from a successful retrieval', async () => {
   };
   const result = await searchRepository('reject old sessions', '/repo', dependencies);
   assert.equal(result.ok, true);
-  if (result.ok) assert.deepEqual(result.candidates[0], { ...scope.regions[0], score: 1 });
+  if (result.ok) {
+    assert.equal(result.outcome, 'candidates');
+    assert.equal(result.withheldCandidates, 0);
+    assert.deepEqual(result.candidates[0], { ...scope.regions[0], score: 1 });
+  }
+});
+
+test('retains weak positive alignment as explicitly uncertain inspectable evidence', async () => {
+  const result = await searchRepository('query', '/repo', {
+    prepare: async () => scope,
+    createEmbedder: async () => ({ embed: async () => [[1, 0], [0.01, Math.sqrt(0.9999)]] }),
+  });
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.equal(result.outcome, 'candidates');
+    assert.ok((result.candidates[0]?.score ?? 1) > 0);
+    assert.ok((result.candidates[0]?.score ?? 1) < 0.02);
+  }
+});
+
+test('returns an honest no-supported-candidate outcome for non-positive alignment', async () => {
+  const result = await searchRepository('query', '/repo', {
+    prepare: async () => scope,
+    createEmbedder: async () => ({ embed: async () => [[1, 0], [-1, 0]] }),
+  });
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.equal(result.outcome, 'no-supported-candidate');
+    assert.deepEqual(result.candidates, []);
+    assert.equal(result.withheldCandidates, 1);
+  }
 });
 
 test('distinguishes an unsupported empty source scope', async () => {
@@ -41,6 +71,16 @@ test('reports retrieval failure without claiming relevant code is absent', async
     assert.equal(result.reason, 'processing-failed');
     assert.match(result.message, /does not mean relevant code is absent/);
   }
+});
+
+test('preserves incomplete coverage warnings with candidate outcomes', async () => {
+  const warning = 'File limit reached (1); some supported files were not processed.';
+  const result = await searchRepository('query', '/repo', {
+    prepare: async () => ({ ...scope, warnings: [warning] }),
+    createEmbedder: async () => ({ embed: async () => [[1, 0], [1, 0]] }),
+  });
+  assert.equal(result.ok, true);
+  if (result.ok) assert.deepEqual(result.scope.warnings, [warning]);
 });
 
 test('makes limiting warnings visible when no source region can be searched', async () => {

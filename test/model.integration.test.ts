@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createLocalEmbedder, retrieveCandidates } from '../src/retrieval.js';
+import { createLocalEmbedder, retrieveCandidates, selectDisplayCandidates } from '../src/retrieval.js';
 
 test('local model retrieves labeled expired-session evidence', {
   skip: process.env['LOCALCODE_RUN_MODEL_TEST'] !== '1' ? 'set LOCALCODE_RUN_MODEL_TEST=1 to run local model integration' : false,
@@ -14,4 +14,7 @@ test('local model retrieves labeled expired-session evidence', {
     { filePath: 'src/profile.ts', startLine: 4, endLine: 6, text: 'export function displayName(user: User) {\n  return user.name;\n}' },
   ], embedder, 3);
   assert.equal(results[0]?.filePath, 'src/session.ts');
+  const selection = selectDisplayCandidates(results);
+  assert.deepEqual(selection.candidates.map(candidate => candidate.filePath), ['src/session.ts']);
+  assert.equal(selection.withheldCount, 2);
 });
