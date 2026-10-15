@@ -8,7 +8,7 @@ import { setTimeout as pause } from 'node:timers/promises';
 import { chromium } from 'playwright';
 
 const PORT = 4173;
-const URL = 'http://127.0.0.1:' + PORT;
+const BASE_URL = 'http://127.0.0.1:' + PORT;
 const GITHUB = 'https://github.com/sultanshahdev/LocalCode-Intelligence';
 const REVISION = 'a'.repeat(40);
 const LOCAL = '/tmp/localcode-browser-smoke';
@@ -21,7 +21,7 @@ const pageErrors = [];
 const observed = [];
 async function waitForPreview() {
   for (let i = 0; i < 100; i++) {
-    try { if ((await fetch(URL, { signal: AbortSignal.timeout(700) })).ok) return; } catch {}
+    try { if ((await fetch(BASE_URL, { signal: AbortSignal.timeout(700) })).ok) return; } catch {}
     await pause(150);
   }
   throw new Error('Vite preview was not reachable on port 4173');
@@ -72,7 +72,7 @@ async function run() {
     return reply(route, { error: 'Unexpected API endpoint ' + endpoint }, 404);
   });
 
-  await page.goto(URL, { waitUntil: 'networkidle' });
+  await page.goto(BASE_URL, { waitUntil: 'networkidle' });
   await page.getByRole('textbox', { name: 'Repository path' }).fill(LOCAL);
   await page.getByRole('button', { name: 'Check Repository' }).click();
   await page.getByText('Ready for search').waitFor();
