@@ -197,6 +197,9 @@ body {
   gap: 8px;
   align-items: stretch;
 }
+.source-switch { display:flex; gap:4px; margin:0 0 12px; padding:3px; width:max-content; background:var(--code-bg); border:1px solid var(--border); border-radius:var(--r-sm); }
+.source-switch button { border:0; background:transparent; color:var(--text-2); padding:6px 10px; border-radius:3px; font:600 12px var(--font-ui); cursor:pointer; }
+.source-switch button:hover, .source-switch__active { background:var(--surface-3) !important; color:var(--text-1) !important; }
 
 .field-input {
   flex: 1;

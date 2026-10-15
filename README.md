@@ -108,6 +108,14 @@ node dist/src/cli.js search "your query" --repo /path/to/repo
 
 ## API
 
+### Repository sources
+
+The UI accepts either an absolute local directory or a public `https://github.com/owner/repository` URL (optional `.git` suffix). GitHub repositories are shallow-cloned without submodules into an application-managed temporary directory and reused for the running session. Use Refresh in clients that support it to re-download the default branch. GitHub download needs network access and Git; embeddings, queries, ranking, and source inspection remain local. No source is sent to an AI service.
+
+Repository preparation is available through `POST /api/repositories/prepare` with `{ "source": { "type": "local" | "github", "value": "..." } }`; it returns an opaque `repositoryId` that may be passed to `/api/search` and `/api/source`. Existing path-based API and CLI use remain supported.
+
+Search uses evidence-aware relevance assessment after vector ranking. Similarity remains a ranking signal, never a probability. Clearly unrelated or nonsense queries return `no-relevant-results`; this means no defensible evidence was found, not that a feature is absent.
+
 JSON API requests must use `Content-Type: application/json` and are limited to 64 KiB. Invalid JSON returns `400`, oversized bodies return `413`, and unsupported content types return `415`, each with a JSON error body. Semantic searches are intentionally serialized because inference is CPU-intensive: one search runs, up to two wait for at most 30 seconds, and further requests receive `503` with `Retry-After: 5`. Health, repository-status, source-view, and static requests are not queued.
 
 The server binds exclusively to `127.0.0.1:4317` (localhost only).
