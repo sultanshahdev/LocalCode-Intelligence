@@ -2,8 +2,7 @@
 
 LocalCode Intelligence is a local-first CLI for finding inspectable source-code
 candidates from a natural-language description. It supports on-demand semantic
-search over JavaScript and TypeScript, plus the original repository-scope
-validation command.
+search over JavaScript and TypeScript, plus repository-scope validation and search-readiness reporting.
 
 ## Requirements
 
@@ -53,6 +52,29 @@ Search results include the relative file path, exact one-based line range,
 cosine similarity score, and actual source excerpt. Similarity orders candidates
 for inspection; it is not proof that a candidate implements the requested behavior.
 Git metadata is not required.
+
+## Check repository search readiness
+
+```sh
+localcode repo status ./path/to/source
+```
+
+This read-only command validates the directory with the same rules as `repo check`,
+then runs the same bounded JavaScript/TypeScript discovery and source preparation
+used by search. It reports the resolved path, supported files found, files processed,
+source eligibility, and whether concrete size or count limits made coverage partial.
+Git metadata is not required.
+
+Status is a current inspection, not a stored result: each invocation scans the scope
+again. `Source eligibility: Available` means at least one non-empty source region can
+be prepared under the configured rules. It does not mean the whole repository is
+covered. Empty files and files skipped by limits do not provide eligible content.
+
+The command does not initialize or download the embedding model, execute semantic
+retrieval, create an index, or modify the inspected repository. The explicit
+preparation, persistent-index, model-readiness, and search-execution fields make
+these boundaries clear. A successful search is the only current way to verify
+model readiness and retrieval execution.
 
 ## Check a repository scope
 
