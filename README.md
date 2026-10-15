@@ -179,8 +179,13 @@ The server binds exclusively to `127.0.0.1:4317` (localhost only).
 
 **Model:** `Xenova/all-MiniLM-L6-v2` (quantized `q8`, ~23 MB)  
 **Source:** [Hugging Face Hub](https://huggingface.co/Xenova/all-MiniLM-L6-v2)  
-**Cache:** `~/.cache/huggingface/hub/` (downloaded model files) plus a bounded, in-memory LRU of embedding vectors for the running API server.
-**First search:** slow (download + embed all files). Subsequent searches in the same server session reuse the model and embeddings for unchanged source regions. The cache is discarded when the server stops; no repository content or vectors are written to a persistent index.
+**Cache:** `~/.cache/huggingface/hub/` (downloaded model files), a bounded in-memory LRU, and a private persistent source-vector cache. On Linux the persistent cache defaults to `$XDG_CACHE_HOME/localcode-intelligence/embeddings`, or `~/.cache/localcode-intelligence/embeddings`. Set `LOCALCODE_EMBEDDING_CACHE_DIR` to use another private cache location.
+
+Only source-region vectors are persisted. Each record is keyed by SHA-256 of the cache format, model/quantization identity, and the exact existing source embedding input; it contains a vector and compatibility metadata, never source text, repository paths, or query text/vectors. Renames therefore invalidate path-prefixed inputs, while content-identical GitHub temporary checkouts can reuse entries. Records use restrictive permissions and atomic replacement; malformed or unavailable records are treated as misses without blocking search. The cache is bounded to 2,000 vector records and evicts oldest modified records on writes.
+
+Set `LOCALCODE_DISABLE_PERSISTENT_CACHE=1` to keep all embedding caching in memory for a process. To clear the default cache safely, stop LocalCode and remove only `$XDG_CACHE_HOME/localcode-intelligence/embeddings` (or `~/.cache/localcode-intelligence/embeddings` when `XDG_CACHE_HOME` is unset). Do not use a broad cache-directory deletion command. A custom `LOCALCODE_EMBEDDING_CACHE_DIR` is private application data and must be cleared only by removing that exact directory.
+
+**First search:** slow (download + embed all files). After restart, unchanged source regions can load from the persistent cache; the model still initializes and each new query still embeds locally. Source discovery remains non-persistent and changed source inputs are recomputed.
 
 On the included three-region fixture with the local quantized model already initialized, a measured cold retrieval took 96 ms and the identical warm retrieval took 2 ms: 4 texts embedded initially, then 4 cache hits and 0 new texts. After editing one source file, the next retrieval embedded only its changed region (1 miss, 3 hits) in 23 ms.
 
@@ -191,7 +196,7 @@ On a temporary 60-file TypeScript fixture (120 regions) with the model already i
 ## Current Limitations
 
 - **JavaScript/TypeScript only** — no support for other languages
-- **No persistent index** — source is still discovered on every request, so deleted files cannot be returned; changed or renamed regions receive new embeddings while unchanged regions reuse the process-local cache
+- **No persistent index** — source is still discovered on every request, so deleted files cannot be returned; persistent caching stores only derived source vectors, not a repository index
 - **Scope limits**: max 500 files, 256 KB per file, 5 MB total source per search
 - **Bounded reads**: files over 256 KB are skipped from filesystem metadata before their contents are allocated; files changing during scanning are skipped with a coverage warning
 - **First search is slow** — model download + full-repo embedding can take 30–90 seconds on first run
