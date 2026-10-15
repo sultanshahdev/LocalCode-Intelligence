@@ -171,6 +171,7 @@ export async function retrieveCandidates(
  * semantic ranks, so MiniLM cannot bury an obvious symbol match. */
 export async function retrieveHybridCandidates(
   query: string, regions: readonly SourceRegion[], embedder: Embedder, limit = 5,
+  options: { intentReranking?: boolean } = {},
 ): Promise<SearchCandidate[]> {
   const allSemantic = await retrieveCandidates(query, regions, embedder, regions.length);
   const semantic = allSemantic.slice(0, 50);
@@ -234,7 +235,8 @@ export async function retrieveHybridCandidates(
   return [...fused.values()]
     .sort((a, b) =>
       symbolPriority(b) - symbolPriority(a)
-      || intentCompatibility(b.candidate, intent) - intentCompatibility(a.candidate, intent)
+      || (options.intentReranking === false ? 0 :
+        intentCompatibility(b.candidate, intent) - intentCompatibility(a.candidate, intent))
       || b.score - a.score
       || b.candidate.score - a.candidate.score,
     )
