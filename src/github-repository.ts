@@ -16,12 +16,16 @@ export function parseGitHubRepositoryUrl(value: string): GitHubRepository {
 /** Refresh stages a uniquely named checkout, verifies HEAD, then publishes it. A failed refresh never removes the old revision. */
 export class GitHubRepositoryAcquirer {
   private readonly prepared = new Map<string, AcquiredGitHubRepository>(); private readonly inFlight = new Map<string, Promise<AcquiredGitHubRepository>>();
+  private readonly references = new Map<string, number>(); private readonly retired = new Set<string>();
   constructor(private readonly root = join(tmpdir(), 'localcode-github'), private readonly timeoutMs = 60_000) {}
   async acquire(value: string, refresh = false): Promise<AcquiredGitHubRepository> {
     const repository = parseGitHubRepositoryUrl(value); const key = repository.canonicalUrl.toLowerCase(); const cached = this.prepared.get(key);
     if (cached && !refresh) return cached; const running = this.inFlight.get(key); if (running) return running;
-    const work = this.stage(repository).then(next => { this.prepared.set(key, next); return next; }).finally(() => this.inFlight.delete(key)); this.inFlight.set(key, work); return work;
+    const work = this.stage(repository).then(async next => { const old = this.prepared.get(key); this.prepared.set(key, next); if (old) { this.retired.add(old.path); await this.cleanup(old.path); } return next; }).finally(() => this.inFlight.delete(key)); this.inFlight.set(key, work); return work;
   }
+  retain(path: string): void { this.references.set(path, (this.references.get(path) ?? 0) + 1); }
+  async release(path: string): Promise<void> { const count = this.references.get(path) ?? 0; if (count <= 1) this.references.delete(path); else this.references.set(path, count - 1); await this.cleanup(path); }
+  private async cleanup(path: string): Promise<void> { if (this.retired.has(path) && !this.references.has(path)) { this.retired.delete(path); await rm(path, { recursive: true, force: true }); } }
   private async stage(repository: GitHubRepository): Promise<AcquiredGitHubRepository> {
     await mkdir(this.root, { recursive: true, mode: 0o700 }); const path = join(this.root, `checkout-${randomUUID()}`);
     try {

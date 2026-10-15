@@ -30,6 +30,17 @@ let embedderInitialization: Promise<Embedder> | null = null;
 const searchController = new SearchExecutionController(1, 2);
 const githubAcquirer = new GitHubRepositoryAcquirer();
 const preparedRepositories = new Map<string, { path: string; type: 'local' | 'github'; label: string; githubUrl: string | undefined; revision: string | undefined }>();
+const MAX_PREPARED_REPOSITORIES = 24;
+function registerPreparedRepository(id: string, entry: { path: string; type: 'local' | 'github'; label: string; githubUrl: string | undefined; revision: string | undefined }): void {
+  preparedRepositories.set(id, entry);
+  if (entry.type === 'github') githubAcquirer.retain(entry.path);
+  while (preparedRepositories.size > MAX_PREPARED_REPOSITORIES) {
+    const oldest = preparedRepositories.entries().next().value as [string, typeof entry] | undefined;
+    if (oldest === undefined) break;
+    preparedRepositories.delete(oldest[0]);
+    if (oldest[1].type === 'github') void githubAcquirer.release(oldest[1].path);
+  }
+}
 async function getEmbedder(): Promise<Embedder> {
   if (cachedEmbedder !== null) return cachedEmbedder;
   if (embedderInitialization === null) {
@@ -331,7 +342,7 @@ async function handlePrepareRepository(req: IncomingMessage, res: ServerResponse
     const status = await inspectRepositorySearchStatus(path);
     if (!status.ok) { sendJson(res, 200, { ok: false, message: status.message }); return; }
     const repositoryId = randomUUID();
-    preparedRepositories.set(repositoryId, { path, type: source.type, label, githubUrl, revision });
+    registerPreparedRepository(repositoryId, { path, type: source.type, label, githubUrl, revision });
     sendJson(res, 200, { ok: true, repositoryId, source: { type: source.type, label, githubUrl, revision }, status: status.status });
   } catch (error: unknown) {
     const message = error instanceof GitHubRepositoryError ? error.message : 'Repository preparation failed.';

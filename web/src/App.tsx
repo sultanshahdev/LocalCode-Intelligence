@@ -67,16 +67,19 @@ function SourceViewer({ repositoryPath, repositoryId, candidate, onClose }: Sour
   useEscapeKey(onClose);
 
   useEffect(() => {
+    let cancelled = false;
     setLoading(true);
     setError(null);
     setSourceData(null);
     apiSource(repositoryPath, candidate.filePath, candidate.startLine, candidate.endLine, 25, repositoryId)
       .then((result) => {
+        if (cancelled) return;
         setSourceData(result);
         if (!result.ok) setError(result.message ?? 'Source read failed');
       })
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Unknown error'))
-      .finally(() => setLoading(false));
+      .catch((e: unknown) => { if (!cancelled) setError(e instanceof Error ? e.message : 'Unknown error'); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
   }, [repositoryPath, repositoryId, candidate.filePath, candidate.startLine, candidate.endLine]);
 
   // Scroll highlighted region into view once loaded
@@ -294,7 +297,8 @@ export default function App() {
   const [sourceType, setSourceType] = useState<'local' | 'github'>('local');
   const [repositoryId, setRepositoryId] = useState<string | undefined>();
   const [githubSource, setGithubSource] = useState<{ url: string; revision: string } | null>(null);
-  const generation = useRef(0);
+  const repositoryGeneration = useRef(0);
+  const searchGeneration = useRef(0);
   const [repoStatus, setRepoStatus] = useState<RepoStatus | null>(null);
   const [repoError, setRepoError] = useState<string | null>(null);
   const [repoLoading, setRepoLoading] = useState(false);
@@ -312,13 +316,13 @@ export default function App() {
   const handleCheckRepo = useCallback(async (refresh = false) => {
     const path = repoPath.trim();
     if (!path) return;
-    const current = ++generation.current;
+    const current = ++repositoryGeneration.current;
     setRepoLoading(true);
     setRepoError(null);
     if (!refresh) { setRepoStatus(null); setResolvedPath(''); setSearchResult(null); setActiveSource(null); }
     try {
       const result = await apiPrepareRepository(sourceType, path, refresh);
-      if (current !== generation.current) return;
+      if (current !== repositoryGeneration.current) return;
       if (result.ok && result.status) {
         setRepoStatus(result.status);
         setResolvedPath(result.source?.label ?? result.resolvedPath ?? path);
@@ -332,32 +336,32 @@ export default function App() {
         setRepoError(result.message ?? 'Repository check failed');
       }
     } catch (e) {
-      setRepoError(e instanceof Error ? e.message : 'Network error — is the server running?');
+      if (current === repositoryGeneration.current) setRepoError(e instanceof Error ? e.message : 'Network error — is the server running?');
     } finally {
-      if (current === generation.current) setRepoLoading(false);
+      if (current === repositoryGeneration.current) setRepoLoading(false);
     }
   }, [repoPath, sourceType]);
 
-  const invalidateRepository = () => { generation.current += 1; setRepoLoading(false); setSearchLoading(false); setRepositoryId(undefined); setRepoStatus(null); setResolvedPath(''); setGithubSource(null); setSearchResult(null); setSearchError(null); setRepoError(null); setActiveSource(null); };
+  const invalidateRepository = () => { repositoryGeneration.current += 1; searchGeneration.current += 1; setRepoLoading(false); setSearchLoading(false); setRepositoryId(undefined); setRepoStatus(null); setResolvedPath(''); setGithubSource(null); setSearchResult(null); setSearchError(null); setRepoError(null); setActiveSource(null); };
   const changeSource = (type: 'local' | 'github') => { invalidateRepository(); setSourceType(type); };
 
   const handleSearch = useCallback(async () => {
     const q = query.trim();
     if (!q || !resolvedPath) return;
-    const current = ++generation.current;
+    const current = ++searchGeneration.current;
     setSearchLoading(true);
     setSearchError(null);
     setSearchResult(null);
     setActiveSource(null);
     try {
       const result = await apiSearch(q, resolvedPath, repositoryId);
-      if (current !== generation.current) return;
+      if (current !== searchGeneration.current) return;
       setSearchResult(result);
       if (!result.ok) setSearchError(result.message ?? 'Search failed');
     } catch (e) {
-      setSearchError(e instanceof Error ? e.message : 'Network error — is the server running?');
+      if (current === searchGeneration.current) setSearchError(e instanceof Error ? e.message : 'Network error — is the server running?');
     } finally {
-      if (current === generation.current) setSearchLoading(false);
+      if (current === searchGeneration.current) setSearchLoading(false);
     }
   }, [query, resolvedPath, repositoryId]);
 
