@@ -9,8 +9,11 @@ import { createLocalcodeServer } from '../src/server.js';
 import { SearchExecutionController, SearchOverloadedError } from '../src/search-execution.js';
 import { prepareSourceScope } from '../src/source.js';
 
-async function withServer(run: (port: number) => Promise<void>): Promise<void> {
-  const server = createLocalcodeServer();
+async function withServer(
+  run: (port: number) => Promise<void>,
+  options: Parameters<typeof createLocalcodeServer>[0] = {},
+): Promise<void> {
+  const server = createLocalcodeServer(options);
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();
   assert.ok(address && typeof address !== 'string');
@@ -90,6 +93,35 @@ test('large files are skipped before bounded reading while normal source remains
     assert.equal(scope.filesProcessed, 1);
     assert.deepEqual(scope.regions.map(region => region.filePath), ['small.ts']);
     assert.match(scope.warnings.join('\n'), /large\.ts: exceeds/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('completed JSON request receives asynchronous semantic-search response', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'localcode-reliability-'));
+  try {
+    await withServer(async port => {
+      const response = await post(port, JSON.stringify({ repositoryPath: directory, query: 'find auth' }));
+      assert.equal(response.status, 200);
+      const payload = JSON.parse(response.body);
+      assert.equal(payload.ok, true);
+      assert.equal(payload.outcome, 'no-supported-candidate');
+      assert.deepEqual(payload.candidates, []);
+    }, {
+      performSearch: async () => {
+        // Delay past the point when Node automatically marks the fully read
+        // IncomingMessage stream as destroyed. It is not a client cancellation.
+        await new Promise(resolve => setTimeout(resolve, 30));
+        return {
+          ok: true as const,
+          outcome: 'no-supported-candidate' as const,
+          candidates: [],
+          withheldCandidates: 0,
+          scope: { regions: [], filesProcessed: 0, warnings: [] },
+        };
+      },
+    });
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
