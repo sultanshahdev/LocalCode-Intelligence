@@ -53,6 +53,28 @@ test('qualified symbol queries prefer implementations over example calls', async
   assert.notEqual(incidental[0]?.evidenceClass, 'exact-identifier');
 });
 
+test('behavioral implementation intent ranks defining logic above an incidental test', async () => {
+  const regions = [
+    { filePath: 'test/reliability.test.ts', startLine: 1, endLine: 4, text: "test('search concurrency is bounded', () => expect(controller).toBeDefined());" },
+    { filePath: 'src/search-execution.ts', startLine: 10, endLine: 18, text: 'export class SearchExecutionController { async run() { if (this.active >= this.maximum) return; await this.execute(); } }' },
+  ];
+  const result = await retrieveHybridCandidates('Where is search concurrency bounded to prevent overload?', regions, {
+    embed: async () => [[1, 0], [1, 0], [1, 0]],
+  });
+  assert.equal(result[0]?.filePath, 'src/search-execution.ts');
+});
+
+test('explicit test and example intents retain their matching file roles', async () => {
+  const regions = [
+    { filePath: 'src/validation.ts', startLine: 1, endLine: 3, text: 'export function validateRequest() { if (!request) throw new Error(); }' },
+    { filePath: 'test/validation.test.ts', startLine: 1, endLine: 3, text: "test('request validation', () => expect(validateRequest).toThrow());" },
+    { filePath: 'examples/request.ts', startLine: 1, endLine: 2, text: 'validateRequest(request);' },
+  ];
+  const embedder = { embed: async () => [[1, 0], [1, 0], [1, 0], [1, 0]] };
+  assert.equal((await retrieveHybridCandidates('Where is request validation tested?', regions, embedder))[0]?.filePath, 'test/validation.test.ts');
+  assert.equal((await retrieveHybridCandidates('Show an example of request validation', regions, embedder))[0]?.filePath, 'examples/request.ts');
+});
+
 test('rejects malformed vectors instead of fabricating a score', () => {
   assert.throws(() => cosineSimilarity([1], [1, 2]), /same non-zero length/);
 });

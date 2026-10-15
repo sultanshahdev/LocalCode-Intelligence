@@ -1,4 +1,5 @@
 import type { SourceRegion } from './source.js';
+import { classifySearchIntent, type SearchIntent } from './search-intent.js';
 
 export const DEFAULT_MODEL = 'Xenova/all-MiniLM-L6-v2';
 
@@ -229,8 +230,14 @@ export async function retrieveHybridCandidates(
     if (item.evidenceClass === 'exact-path') return 1;
     return 0;
   };
+  const intent = classifySearchIntent(query);
   return [...fused.values()]
-    .sort((a, b) => symbolPriority(b) - symbolPriority(a) || b.score - a.score || b.candidate.score - a.candidate.score)
+    .sort((a, b) =>
+      symbolPriority(b) - symbolPriority(a)
+      || intentCompatibility(b.candidate, intent) - intentCompatibility(a.candidate, intent)
+      || b.score - a.score
+      || b.candidate.score - a.candidate.score,
+    )
     .slice(0, limit)
     .map(item => withRetrievalEvidence(
       item.candidate,
@@ -240,6 +247,30 @@ export async function retrieveHybridCandidates(
       item.semanticRank,
       item.lexicalRank,
     ));
+}
+
+/**
+ * Structural evidence is intentionally small and only breaks ties between
+ * fused retrieval candidates. It does not remove tests/examples: explicit
+ * intent reverses the preference. Regexes cover common JS/TS declaration
+ * forms without adding an AST dependency to the hot search path.
+ */
+function intentCompatibility(candidate: SearchCandidate, intent: SearchIntent): number {
+  const text = candidate.text;
+  const testRole = /(?:^|\/)(?:test|tests|__tests__|spec)(?:\/|$)|\.(?:test|spec)\.[cm]?[jt]sx?$/i.test(candidate.filePath)
+    || /\b(?:describe|it|test|expect|assert)\s*\(/.test(text);
+  const exampleRole = /(?:^|\/)(?:examples?|demo|docs?)(?:\/|$)|readme/i.test(candidate.filePath);
+  const definition = /\b(?:export\s+)?(?:async\s+)?function\s+[A-Za-z_$][\w$]*\s*\(|\bclass\s+[A-Za-z_$][\w$]*\b|\b(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>|\b[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+\s*=\s*(?:async\s*)?function\b/.test(text);
+  const executableLogic = /\b(?:if|switch|for|while|try|catch|throw|return|await)\b/.test(text);
+  const implementationEvidence = (definition ? 2 : 0) + (executableLogic ? 1 : 0);
+
+  if (intent === 'test') return (testRole ? 4 : 0) + (exampleRole ? -1 : 0);
+  if (intent === 'example') return (exampleRole ? 4 : 0) + (testRole ? -1 : 0);
+  if (intent === 'usage') return (definition ? -1 : 1) + (testRole ? -1 : 0);
+  if (intent === 'implementation' || intent === 'identifier') {
+    return implementationEvidence + (testRole ? -3 : 0) + (exampleRole ? -2 : 0);
+  }
+  return implementationEvidence * 0.25 + (testRole ? -0.25 : 0);
 }
 
 function withRetrievalEvidence(
