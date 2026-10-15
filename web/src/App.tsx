@@ -472,7 +472,7 @@ export default function App() {
                 setSearchError(null);
                 setActiveSource(null);
                 setQuery(e.target.value);
-              }
+              }}
               onKeyDown={(e) => { if (e.key === 'Enter') void handleSearch(); }}
               disabled={!canSearch}
               aria-label="Search query"
