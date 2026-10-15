@@ -23,6 +23,8 @@ export interface SourceRegion {
 
 export interface SourceScope {
   regions: SourceRegion[];
+  /** Supported files observed before per-file and total-byte limits are applied. */
+  filesDiscovered?: number;
   filesProcessed: number;
   warnings: string[];
 }
@@ -42,6 +44,7 @@ export async function prepareSourceScope(
 ): Promise<SourceScope> {
   const files = await discoverSourceFiles(repositoryPath, limits.maxFiles + 1);
   const warnings: string[] = [];
+  const filesDiscovered = files.length;
   if (files.length > limits.maxFiles) {
     warnings.push(`File limit reached (${limits.maxFiles}); some supported files were not processed.`);
     files.length = limits.maxFiles;
@@ -73,7 +76,7 @@ export async function prepareSourceScope(
     regions.push(...segmentSource(relative(repositoryPath, absolutePath), content, limits));
   }
 
-  return { regions, filesProcessed, warnings };
+  return { regions, filesDiscovered, filesProcessed, warnings };
 }
 
 export async function discoverSourceFiles(

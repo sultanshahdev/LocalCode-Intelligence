@@ -4,15 +4,19 @@ import { pathToFileURL } from 'node:url';
 
 import { validateRepositoryDirectory } from './repository.js';
 import { searchRepository, type SearchResult } from './search.js';
+import { inspectRepositorySearchStatus, type RepositoryStatusResult } from './status.js';
 
 const REPO_USAGE = 'Usage: localcode repo check <path>';
+const STATUS_USAGE = 'Usage: localcode repo status <path>';
 const SEARCH_USAGE = 'Usage: localcode search "<query>" --repo <path>';
 const USAGE = `Usage:
   localcode repo check <path>
+  localcode repo status <path>
   localcode search "<query>" --repo <path>`;
 
 export interface CliDependencies {
   search(query: string, repositoryPath: string): Promise<SearchResult>;
+  status?(repositoryPath: string): Promise<RepositoryStatusResult>;
 }
 
 export interface CliStreams {
@@ -23,37 +27,67 @@ export interface CliStreams {
 export async function runCli(
   args: readonly string[],
   streams: CliStreams = { stdout: process.stdout, stderr: process.stderr },
-  dependencies: CliDependencies = { search: searchRepository },
+  dependencies: CliDependencies = { search: searchRepository, status: inspectRepositorySearchStatus },
 ): Promise<number> {
-  if (args[0] === 'search') {
-    return runSearch(args.slice(1), streams, dependencies);
-  }
+  if (args[0] === 'search') return runSearch(args.slice(1), streams, dependencies);
 
   const [group, command, repositoryPath, ...extraArguments] = args;
-
-  if (group !== 'repo' || command !== 'check') {
+  if (group !== 'repo' || (command !== 'check' && command !== 'status')) {
     streams.stderr.write(`Unknown command.\n${USAGE}\n`);
     return 2;
   }
 
+  const commandUsage = command === 'status' ? STATUS_USAGE : REPO_USAGE;
   if (repositoryPath === undefined || repositoryPath.length === 0) {
-    streams.stderr.write(`Repository path is required.\n${REPO_USAGE}\n`);
+    streams.stderr.write(`Repository path is required.\n${commandUsage}\n`);
     return 2;
   }
-
   if (extraArguments.length > 0) {
-    streams.stderr.write(`Too many arguments.\n${REPO_USAGE}\n`);
+    streams.stderr.write(`Too many arguments.\n${commandUsage}\n`);
     return 2;
   }
 
-  const result = await validateRepositoryDirectory(repositoryPath);
+  const validation = await validateRepositoryDirectory(repositoryPath);
+  if (!validation.ok) {
+    streams.stderr.write(`${validation.message}\n`);
+    return 1;
+  }
+
+  if (command === 'status') {
+    return runRepositoryStatus(validation.resolvedPath, streams, dependencies);
+  }
+
+  streams.stdout.write(`Validated repository scope: ${validation.resolvedPath}\n`);
+  streams.stdout.write('Status: directory is readable; indexing has not been performed.\n');
+  return 0;
+}
+
+async function runRepositoryStatus(
+  repositoryPath: string,
+  streams: CliStreams,
+  dependencies: CliDependencies,
+): Promise<number> {
+  const result = await (dependencies.status ?? inspectRepositorySearchStatus)(repositoryPath);
   if (!result.ok) {
     streams.stderr.write(`${result.message}\n`);
     return 1;
   }
 
-  streams.stdout.write(`Validated repository scope: ${result.resolvedPath}\n`);
-  streams.stdout.write('Status: directory is readable; indexing has not been performed.\n');
+  const { status } = result;
+  streams.stdout.write(`Repository: ${repositoryPath}\n`);
+  streams.stdout.write('Directory: Accessible\n');
+  streams.stdout.write(`Supported source files: ${status.filesDiscovered}\n`);
+  streams.stdout.write(`Eligible source files processed: ${status.filesProcessed}\n`);
+  streams.stdout.write(`Source eligibility: ${status.eligible ? 'Available' : 'None'}\n`);
+  streams.stdout.write(`Coverage: ${status.coverage === 'complete' ? 'Complete within configured discovery rules' : 'Partial'}\n`);
+  for (const warning of status.warnings) streams.stdout.write(`Warning: ${warning}\n`);
+  streams.stdout.write(`Preparation: ${status.eligible ? 'On-demand; not performed by status' : 'Not performed'}\n`);
+  streams.stdout.write('Persistent index: None\n');
+  streams.stdout.write('Model readiness: Not checked\n');
+  streams.stdout.write('Search execution: Not performed\n\n');
+  streams.stdout.write(status.eligible
+    ? 'Status: Source is available for search preparation.\n'
+    : 'Status: No supported searchable source content is available for search.\n');
   return 0;
 }
 
