@@ -22,7 +22,7 @@ export interface RepoStatusResponse {
 }
 export interface PreparedRepositoryResponse extends RepoStatusResponse {
   repositoryId?: string;
-  source?: { type: 'local' | 'github'; label: string; githubUrl?: string };
+  source?: { type: 'local' | 'github'; label: string; githubUrl?: string; revision?: string };
 }
 
 export interface SearchCandidate {

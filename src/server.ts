@@ -29,7 +29,7 @@ let cachedEmbedder: Embedder | null = null;
 let embedderInitialization: Promise<Embedder> | null = null;
 const searchController = new SearchExecutionController(1, 2);
 const githubAcquirer = new GitHubRepositoryAcquirer();
-const preparedRepositories = new Map<string, { path: string; type: 'local' | 'github'; label: string; githubUrl: string | undefined }>();
+const preparedRepositories = new Map<string, { path: string; type: 'local' | 'github'; label: string; githubUrl: string | undefined; revision: string | undefined }>();
 async function getEmbedder(): Promise<Embedder> {
   if (cachedEmbedder !== null) return cachedEmbedder;
   if (embedderInitialization === null) {
@@ -315,27 +315,27 @@ async function handlePrepareRepository(req: IncomingMessage, res: ServerResponse
   let body: unknown;
   try { body = await readJsonBody(req); } catch (error) { sendBodyError(res, error); return; }
   const source = typeof body === 'object' && body !== null ? (body as { source?: { type?: unknown; value?: unknown }; refresh?: unknown }).source : undefined;
-  if (source === undefined || (source.type !== 'local' && source.type !== 'github') || typeof source.value !== 'string' || !source.value.trim()) {
+  if (source === undefined || typeof source !== 'object' || source === null || (source.type !== 'local' && source.type !== 'github') || typeof source.value !== 'string' || !source.value.trim()) {
     sendError(res, 400, 'source.type and source.value are required.'); return;
   }
   try {
-    let path: string; let label: string; let githubUrl: string | undefined;
+    let path: string; let label: string; let githubUrl: string | undefined; let revision: string | undefined;
     if (source.type === 'local') {
       const validation = await validateRepositoryDirectory(source.value.trim());
       if (!validation.ok) { sendJson(res, 200, { ok: false, message: validation.message }); return; }
       path = validation.resolvedPath; label = path;
     } else {
       const acquired = await githubAcquirer.acquire(source.value, body !== null && typeof body === 'object' && (body as { refresh?: unknown }).refresh === true);
-      path = acquired.path; label = `${acquired.repository.owner}/${acquired.repository.repository}`; githubUrl = acquired.repository.canonicalUrl;
+      path = acquired.path; label = `${acquired.repository.owner}/${acquired.repository.repository}`; githubUrl = acquired.repository.canonicalUrl; revision = acquired.revision;
     }
     const status = await inspectRepositorySearchStatus(path);
     if (!status.ok) { sendJson(res, 200, { ok: false, message: status.message }); return; }
     const repositoryId = randomUUID();
-    preparedRepositories.set(repositoryId, { path, type: source.type, label, githubUrl });
-    sendJson(res, 200, { ok: true, repositoryId, source: { type: source.type, label, githubUrl }, status: status.status });
+    preparedRepositories.set(repositoryId, { path, type: source.type, label, githubUrl, revision });
+    sendJson(res, 200, { ok: true, repositoryId, source: { type: source.type, label, githubUrl, revision }, status: status.status });
   } catch (error: unknown) {
     const message = error instanceof GitHubRepositoryError ? error.message : 'Repository preparation failed.';
-    sendJson(res, 200, { ok: false, message });
+    sendJson(res, 200, { ok: false, message, code: error instanceof GitHubRepositoryError ? error.code : 'preparation-failed' });
   }
 }
 

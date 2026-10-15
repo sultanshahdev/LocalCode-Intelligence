@@ -110,7 +110,9 @@ node dist/src/cli.js search "your query" --repo /path/to/repo
 
 ### Repository sources
 
-The UI accepts either an absolute local directory or a public `https://github.com/owner/repository` URL (optional `.git` suffix). GitHub repositories are shallow-cloned without submodules into an application-managed temporary directory and reused for the running session. Use Refresh in clients that support it to re-download the default branch. GitHub download needs network access and Git; embeddings, queries, ranking, and source inspection remain local. No source is sent to an AI service.
+The UI accepts either an absolute local directory or a public `https://github.com/owner/repository` URL (optional `.git` suffix). GitHub repositories are shallow-cloned without submodules into private application-managed temporary storage and reused for the running session. Refresh stages and verifies a new checkout before publishing it, so a failed refresh leaves the prior prepared revision usable. Prepared GitHub results link to a commit-pinned GitHub blob URL. GitHub download needs network access and Git; embeddings, queries, ranking, and source inspection remain local. No source is sent to an AI service.
+
+Checkouts are time-bounded and named with unpredictable IDs; they are temporary process resources, not a persistent repository index. Clone size cannot be hard-limited while Git is downloading, so avoid unusually large repositories.
 
 Repository preparation is available through `POST /api/repositories/prepare` with `{ "source": { "type": "local" | "github", "value": "..." } }`; it returns an opaque `repositoryId` that may be passed to `/api/search` and `/api/source`. Existing path-based API and CLI use remain supported.
 
