@@ -242,7 +242,7 @@ export async function retrieveHybridCandidates(
     .sort((a, b) =>
       symbolPriority(b) - symbolPriority(a)
       || (options.intentReranking === false ? 0 :
-        intentCompatibility(b.candidate, intent) - intentCompatibility(a.candidate, intent))
+        intentCompatibility(b.candidate, intent, query) - intentCompatibility(a.candidate, intent, query))
       || b.score - a.score
       || b.candidate.score - a.candidate.score,
     )
@@ -258,12 +258,21 @@ export async function retrieveHybridCandidates(
 }
 
 /**
- * Structural evidence is intentionally small and only breaks ties between
- * fused retrieval candidates. It does not remove tests/examples: explicit
- * intent reverses the preference. Regexes cover common JS/TS declaration
- * forms without adding an AST dependency to the hot search path.
+ * Structural evidence may change ranking among fused candidates, but only
+ * when the candidate overlaps a meaningful query term. A generic function
+ * with no query evidence must not outrank a relevant region merely because
+ * it contains an if/return statement. This is a lightweight guard rather
+ * than a full semantic or syntax analysis.
  */
-function intentCompatibility(candidate: SearchCandidate, intent: SearchIntent): number {
+function intentCompatibility(candidate: SearchCandidate, intent: SearchIntent, query: string): number {
+  const meaningfulQueryTerms = [...new Set(identifierTokens(query).filter(token =>
+    token.length > 2 && !STOP_TERMS.has(token) &&
+    !['show', 'which', 'please', 'example', 'examples', 'test', 'tests', 'testing',
+      'tested', 'where', 'how', 'used', 'usage', 'find', 'locate'].includes(token)
+  ))];
+  const candidateTokens = new Set(identifierTokens(candidate.filePath + ' ' + candidate.text));
+  if (meaningfulQueryTerms.length > 0 &&
+      !meaningfulQueryTerms.some(term => candidateTokens.has(term))) return 0;
   const text = candidate.text;
   const testRole = /(?:^|\/)(?:test|tests|__tests__|spec)(?:\/|$)|\.(?:test|spec)\.[cm]?[jt]sx?$/i.test(candidate.filePath)
     || /\b(?:describe|it|test|expect|assert)\s*\(/.test(text);
