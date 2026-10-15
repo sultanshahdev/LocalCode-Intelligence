@@ -23,6 +23,23 @@ test('returns real region metadata from a successful retrieval', async () => {
   }
 });
 
+test('keeps an exact identifier visible when its cosine similarity is negative', async () => {
+  const result = await searchRepository('verifyToken', '/repo', {
+    prepare: async () => ({ filesProcessed: 2, warnings: [], regions: [
+      { filePath: 'src/noise.ts', startLine: 1, endLine: 1, text: 'export const unrelated = true;' },
+      { filePath: 'src/auth.ts', startLine: 4, endLine: 4, text: 'export function verifyToken() {}' },
+    ] }),
+    createEmbedder: async () => ({ embed: async () => [[1, 0], [1, 0], [-1, 0]] }),
+  });
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.equal(result.outcome, 'candidates');
+    assert.equal(result.candidates[0]?.filePath, 'src/auth.ts');
+    assert.equal(result.candidates[0]?.score, -1);
+    assert.equal(result.candidates[0]?.lexicalEvidence, true);
+  }
+});
+
 test('retains weak positive alignment as explicitly uncertain inspectable evidence', async () => {
   const result = await searchRepository('query', '/repo', {
     prepare: async () => scope,

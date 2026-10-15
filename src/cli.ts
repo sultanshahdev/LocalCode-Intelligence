@@ -5,6 +5,9 @@ import { pathToFileURL } from 'node:url';
 import { validateRepositoryDirectory } from './repository.js';
 import { searchRepository, type SearchResult } from './search.js';
 import { inspectRepositorySearchStatus, type RepositoryStatusResult } from './status.js';
+import { prepareSourceScope } from './source.js';
+import { createLocalEmbedder, retrieveCandidates, retrieveHybridCandidates, retrieveLexicalCandidates } from './retrieval.js';
+import { assessRelevance } from './relevance.js';
 
 const REPO_USAGE = 'Usage: localcode repo check <path>';
 const STATUS_USAGE = 'Usage: localcode repo status <path>';
@@ -29,6 +32,7 @@ export async function runCli(
   streams: CliStreams = { stdout: process.stdout, stderr: process.stderr },
   dependencies: CliDependencies = { search: searchRepository, status: inspectRepositorySearchStatus },
 ): Promise<number> {
+  if (args[0] === 'diagnose') return runDiagnostic(args.slice(1), streams);
   if (args[0] === 'search') return runSearch(args.slice(1), streams, dependencies);
 
   const [group, command, repositoryPath, ...extraArguments] = args;
@@ -59,6 +63,20 @@ export async function runCli(
 
   streams.stdout.write(`Validated repository scope: ${validation.resolvedPath}\n`);
   streams.stdout.write('Status: directory is readable; indexing has not been performed.\n');
+  return 0;
+}
+
+async function runDiagnostic(args: readonly string[], streams: CliStreams): Promise<number> {
+  if (process.env['NODE_ENV'] === 'production') { streams.stderr.write('Diagnostics are disabled in production.\n'); return 2; }
+  const [query, repoFlag, repositoryPath] = args;
+  if (!query || repoFlag !== '--repo' || !repositoryPath) { streams.stderr.write('Usage: localcode diagnose "query" --repo <path>\n'); return 2; }
+  const scope = await prepareSourceScope(repositoryPath);
+  const embedder = await createLocalEmbedder();
+  const semantic = await retrieveCandidates(query, scope.regions, embedder, 20);
+  const lexical = retrieveLexicalCandidates(query, scope.regions, 20);
+  const fused = await retrieveHybridCandidates(query, scope.regions, embedder, 20);
+  const relevance = assessRelevance(query, fused);
+  streams.stdout.write(JSON.stringify({ query, coverage: { filesProcessed: scope.filesProcessed, filesDiscovered: scope.filesDiscovered, warnings: scope.warnings, regions: scope.regions.length }, semantic, lexical, fusion: fused, relevance, displayed: fused.filter(candidate => candidate.score > 0 || candidate.lexicalEvidence) }, null, 2) + '\n');
   return 0;
 }
 

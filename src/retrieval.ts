@@ -104,6 +104,10 @@ function createDeferredVector(): DeferredVector {
 
 export interface SearchCandidate extends SourceRegion {
   score: number;
+  /** Exact identifier/path token evidence; independent of cosine similarity. */
+  lexicalEvidence?: boolean;
+  /** Reciprocal-rank fusion ordering signal, never a probability. */
+  fusionScore?: number;
 }
 
 export interface CandidateDisplaySelection {
@@ -118,7 +122,7 @@ export interface CandidateDisplaySelection {
 export function selectDisplayCandidates(
   candidates: readonly SearchCandidate[],
 ): CandidateDisplaySelection {
-  const displayed = candidates.filter(candidate => candidate.score > 0);
+  const displayed = candidates.filter(candidate => candidate.score > 0 || candidate.lexicalEvidence === true);
   return { candidates: displayed, withheldCount: candidates.length - displayed.length };
 }
 
@@ -154,16 +158,31 @@ export async function retrieveHybridCandidates(
   const semantic = allSemantic.slice(0, 50);
   const rawByLocation = new Map(allSemantic.map(candidate => [`${candidate.filePath}:${candidate.startLine}:${candidate.endLine}`, candidate]));
   const lexical = retrieveLexicalCandidates(query, regions, 50).map(candidate => rawByLocation.get(`${candidate.filePath}:${candidate.startLine}:${candidate.endLine}`) ?? candidate);
-  const fused = new Map<string, { candidate: SearchCandidate; score: number }>();
+  const fused = new Map<string, { candidate: SearchCandidate; score: number; lexical: boolean }>();
   const add = (candidate: SearchCandidate, rank: number) => {
     const key = `${candidate.filePath}:${candidate.startLine}:${candidate.endLine}`;
     const current = fused.get(key);
     const score = (current?.score ?? 0) + 1 / (60 + rank);
-    fused.set(key, { candidate, score });
+    fused.set(key, { candidate, score, lexical: current?.lexical ?? false });
   };
   semantic.forEach((candidate, index) => add(candidate, index + 1));
-  lexical.forEach((candidate, index) => add(candidate, index + 1));
-  return [...fused.values()].sort((a, b) => b.score - a.score || b.candidate.score - a.candidate.score).slice(0, limit).map(item => item.candidate);
+  lexical.forEach((candidate, index) => {
+    add(candidate, index + 1);
+    const key = `${candidate.filePath}:${candidate.startLine}:${candidate.endLine}`;
+    const entry = fused.get(key);
+    if (entry !== undefined) entry.lexical = true;
+  });
+  return [...fused.values()].sort((a, b) => b.score - a.score || b.candidate.score - a.candidate.score).slice(0, limit)
+    .map(item => withRetrievalEvidence(item.candidate, item.lexical, item.score));
+}
+
+function withRetrievalEvidence(candidate: SearchCandidate, lexical: boolean, fusionScore: number): SearchCandidate {
+  // Keep API/CLI candidate shapes stable; diagnostics can still inspect these
+  // non-enumerable fields without presenting fusion as a user-facing score.
+  const output = { ...candidate };
+  Object.defineProperty(output, 'fusionScore', { value: fusionScore, enumerable: false });
+  if (lexical) Object.defineProperty(output, 'lexicalEvidence', { value: true, enumerable: false });
+  return output;
 }
 
 export function retrieveLexicalCandidates(query: string, regions: readonly SourceRegion[], limit = 50): SearchCandidate[] {
