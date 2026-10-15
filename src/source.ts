@@ -1,4 +1,5 @@
-import { readFile, readdir } from 'node:fs/promises';
+import { open, readdir, stat } from 'node:fs/promises';
+import { constants } from 'node:fs';
 import { extname, relative, resolve } from 'node:path';
 
 export const DEFAULT_SOURCE_LIMITS = {
@@ -54,16 +55,34 @@ export async function prepareSourceScope(
   let totalBytes = 0;
   let filesProcessed = 0;
   for (const absolutePath of files) {
+    const displayPath = relative(repositoryPath, absolutePath);
+    let expectedBytes: number;
+    try {
+      expectedBytes = (await stat(absolutePath)).size;
+    } catch {
+      warnings.push(`Skipped ${displayPath}: file became unavailable during scanning.`);
+      continue;
+    }
+    if (expectedBytes > limits.maxFileBytes) {
+      warnings.push(`Skipped ${displayPath}: exceeds ${limits.maxFileBytes} bytes.`);
+      continue;
+    }
+    if (totalBytes + expectedBytes > limits.maxTotalBytes) {
+      warnings.push(`Source byte limit reached (${limits.maxTotalBytes}); remaining files were not processed.`);
+      break;
+    }
+
     let content: string;
     try {
-      content = await readFile(absolutePath, 'utf8');
-    } catch (error: unknown) {
-      throw new SourceProcessingError(`Unable to read source file: ${relative(repositoryPath, absolutePath)}`, error);
+      content = await readBoundedSourceFile(absolutePath, limits.maxFileBytes);
+    } catch {
+      warnings.push(`Skipped ${displayPath}: file became unavailable during scanning.`);
+      continue;
     }
 
     const bytes = Buffer.byteLength(content);
     if (bytes > limits.maxFileBytes) {
-      warnings.push(`Skipped ${relative(repositoryPath, absolutePath)}: exceeds ${limits.maxFileBytes} bytes.`);
+      warnings.push(`Skipped ${displayPath}: exceeds ${limits.maxFileBytes} bytes.`);
       continue;
     }
     if (totalBytes + bytes > limits.maxTotalBytes) {
@@ -73,10 +92,26 @@ export async function prepareSourceScope(
 
     totalBytes += bytes;
     filesProcessed += 1;
-    regions.push(...segmentSource(relative(repositoryPath, absolutePath), content, limits));
+    regions.push(...segmentSource(displayPath, content, limits));
   }
 
   return { regions, filesDiscovered, filesProcessed, warnings };
+}
+
+async function readBoundedSourceFile(path: string, maxBytes: number): Promise<string> {
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const buffer = Buffer.alloc(maxBytes + 1);
+    let count = 0;
+    while (count < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, count, buffer.length - count, count);
+      if (bytesRead === 0) break;
+      count += bytesRead;
+    }
+    return buffer.subarray(0, count).toString('utf8');
+  } finally {
+    await handle.close();
+  }
 }
 
 export async function discoverSourceFiles(

@@ -8,21 +8,24 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { lstat, realpath, open } from 'node:fs/promises';
 import { constants, existsSync, createReadStream } from 'node:fs';
 import { resolve, relative, join, sep, extname, isAbsolute, win32 } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { validateRepositoryDirectory } from './repository.js';
 import { inspectRepositorySearchStatus } from './status.js';
 import { searchRepository } from './search.js';
 import { CachingEmbedder, createLocalEmbedder, type Embedder } from './retrieval.js';
 import { prepareSourceScope, DEFAULT_SOURCE_LIMITS } from './source.js';
+import { SearchExecutionController, SearchOverloadedError, SearchQueueAbortedError } from './search-execution.js';
 
 const HOST = '127.0.0.1';
 const PORT = Number(process.env['PORT'] ?? 4317);
 const MAX_BODY_BYTES = 64 * 1024; // 64 KB
+const JSON_CONTENT_TYPE = 'application/json';
 
 // ── Cached embedder ───────────────────────────────────────────────────────────
 let cachedEmbedder: Embedder | null = null;
 let embedderInitialization: Promise<Embedder> | null = null;
+const searchController = new SearchExecutionController(1, 2);
 async function getEmbedder(): Promise<Embedder> {
   if (cachedEmbedder !== null) return cachedEmbedder;
   if (embedderInitialization === null) {
@@ -63,27 +66,54 @@ function setCorsHeaders(res: ServerResponse, req: IncomingMessage): void {
 }
 
 // ── Body reader ───────────────────────────────────────────────────────────────
+class RequestBodyError extends Error {
+  constructor(readonly status: 400 | 413, message: string) {
+    super(message);
+  }
+}
+
+function requiresJson(req: IncomingMessage, res: ServerResponse): boolean {
+  const contentType = req.headers['content-type'];
+  if (typeof contentType === 'string' && contentType.toLowerCase().split(';', 1)[0] === JSON_CONTENT_TYPE) return true;
+  sendError(res, 415, 'Content-Type must be application/json.');
+  return false;
+}
+
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {
+    let settled = false;
     let size = 0;
     const chunks: Buffer[] = [];
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      req.removeListener('aborted', onAborted);
+      req.removeListener('error', onError);
+      callback();
+    };
+    const onAborted = () => finish(() => reject(new RequestBodyError(400, 'Request was aborted.')));
+    const onError = () => finish(() => reject(new RequestBodyError(400, 'Request body could not be read.')));
     req.on('data', (chunk: Buffer) => {
+      if (settled) return;
       size += chunk.length;
       if (size > MAX_BODY_BYTES) {
-        reject(new Error('Request body too large.'));
-        req.destroy();
+        finish(() => reject(new RequestBodyError(413, 'Request body exceeds the 64 KiB limit.')));
+        req.resume();
         return;
       }
       chunks.push(chunk);
     });
     req.on('end', () => {
+      if (settled) return;
       try {
-        resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+        const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        finish(() => resolve(body));
       } catch {
-        reject(new Error('Invalid JSON body.'));
+        finish(() => reject(new RequestBodyError(400, 'Invalid JSON body.')));
       }
     });
-    req.on('error', reject);
+    req.once('aborted', onAborted);
+    req.once('error', onError);
   });
 }
 
@@ -94,8 +124,14 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(payload);
 }
 
-function sendError(res: ServerResponse, status: number, message: string): void {
+function sendError(res: ServerResponse, status: number, message: string, headers?: Record<string, string>): void {
+  if (headers !== undefined) Object.entries(headers).forEach(([key, value]) => res.setHeader(key, value));
   sendJson(res, status, { error: message });
+}
+
+function sendBodyError(res: ServerResponse, error: unknown): void {
+  const bodyError = error instanceof RequestBodyError ? error : new RequestBodyError(400, 'Invalid JSON body.');
+  sendError(res, bodyError.status, bodyError.message);
 }
 
 // ── Source-view safety ────────────────────────────────────────────────────────
@@ -235,11 +271,12 @@ async function handleHealth(res: ServerResponse): Promise<void> {
 }
 
 async function handleRepoStatus(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (!requiresJson(req, res)) return;
   let body: unknown;
   try {
     body = await readJsonBody(req);
-  } catch (e) {
-    sendError(res, 400, e instanceof Error ? e.message : 'Bad request');
+  } catch (error: unknown) {
+    sendBodyError(res, error);
     return;
   }
 
@@ -270,11 +307,12 @@ async function handleRepoStatus(req: IncomingMessage, res: ServerResponse): Prom
 }
 
 async function handleSearch(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (!requiresJson(req, res)) return;
   let body: unknown;
   try {
     body = await readJsonBody(req);
-  } catch (e) {
-    sendError(res, 400, e instanceof Error ? e.message : 'Bad request');
+  } catch (error: unknown) {
+    sendBodyError(res, error);
     return;
   }
 
@@ -299,10 +337,30 @@ async function handleSearch(req: IncomingMessage, res: ServerResponse): Promise<
     return;
   }
 
-  const result = await searchRepository(query.trim(), validation.resolvedPath, {
-    prepare: prepareSourceScope,
-    createEmbedder: getEmbedder,
-  });
+  const abortController = new AbortController();
+  const abort = () => abortController.abort();
+  req.once('aborted', abort);
+  res.once('close', abort);
+  let result;
+  try {
+    result = await searchController.execute(() => searchRepository(query.trim(), validation.resolvedPath, {
+      prepare: prepareSourceScope,
+      createEmbedder: getEmbedder,
+    }), abortController.signal);
+  } catch (error: unknown) {
+    if (error instanceof SearchOverloadedError) {
+      sendError(res, 503, error.message, { 'Retry-After': '5' });
+      return;
+    }
+    if (error instanceof SearchQueueAbortedError || req.destroyed || res.destroyed) return;
+    sendError(res, 500, 'Search could not be scheduled.');
+    return;
+  } finally {
+    req.removeListener('aborted', abort);
+    res.removeListener('close', abort);
+  }
+
+  if (req.destroyed || res.destroyed) return;
 
   if (!result.ok) {
     sendJson(res, 200, { ok: false, reason: result.reason, message: result.message });
@@ -323,11 +381,12 @@ async function handleSearch(req: IncomingMessage, res: ServerResponse): Promise<
 }
 
 async function handleSource(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (!requiresJson(req, res)) return;
   let body: unknown;
   try {
     body = await readJsonBody(req);
-  } catch (e) {
-    sendError(res, 400, e instanceof Error ? e.message : 'Bad request');
+  } catch (error: unknown) {
+    sendBodyError(res, error);
     return;
   }
 
@@ -495,7 +554,13 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
 }
 
 // ── Start ─────────────────────────────────────────────────────────────────────
-const server = createServer(handleRequest);
-server.listen(PORT, HOST, () => {
-  console.log(`LocalCode Intelligence API listening on http://${HOST}:${PORT}`);
-});
+export function createLocalcodeServer() {
+  return createServer(handleRequest);
+}
+
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const server = createLocalcodeServer();
+  server.listen(PORT, HOST, () => {
+    console.log(`LocalCode Intelligence API listening on http://${HOST}:${PORT}`);
+  });
+}
