@@ -319,11 +319,26 @@ export default function App() {
     const current = ++repositoryGeneration.current;
     setRepoLoading(true);
     setRepoError(null);
-    if (!refresh) { setRepoStatus(null); setResolvedPath(''); setSearchResult(null); setActiveSource(null); }
+    if (!refresh) {
+      searchGeneration.current += 1;
+      setSearchLoading(false);
+      setRepoStatus(null);
+      setResolvedPath('');
+      setSearchResult(null);
+      setActiveSource(null);
+    }
     try {
       const result = await apiPrepareRepository(sourceType, path, refresh);
       if (current !== repositoryGeneration.current) return;
       if (result.ok && result.status) {
+        // Only a completed, successful refresh invalidates the old revision's
+        // search results; a failed refresh leaves the prior session usable.
+        if (refresh) {
+          searchGeneration.current += 1;
+          setSearchLoading(false);
+          setSearchResult(null);
+          setActiveSource(null);
+        }
         setRepoStatus(result.status);
         setResolvedPath(result.source?.label ?? result.resolvedPath ?? path);
         setRepositoryId(result.repositoryId);
@@ -448,7 +463,16 @@ export default function App() {
                   : 'Select a valid repository above to enable search'
               }
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              onChange={(e) => {
+                // A response to the previous query must never be rendered as
+                // evidence for the text currently visible in the search field.
+                searchGeneration.current += 1;
+                setSearchLoading(false);
+                setSearchResult(null);
+                setSearchError(null);
+                setActiveSource(null);
+                setQuery(e.target.value);
+              }
               onKeyDown={(e) => { if (e.key === 'Enter') void handleSearch(); }}
               disabled={!canSearch}
               aria-label="Search query"
