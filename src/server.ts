@@ -47,7 +47,7 @@ async function getEmbedder(): Promise<Embedder> {
   if (embedderInitialization === null) {
     embedderInitialization = createLocalEmbedder()
       .then(embedder => {
-        cachedEmbedder = new PersistentCachingEmbedder(new CachingEmbedder(embedder), 'Xenova/all-MiniLM-L6-v2:q8');
+        cachedEmbedder = new PersistentCachingEmbedder(new CachingEmbedder(embedder), 'Xenova/all-MiniLM-L6-v2:q8', undefined, 384);
         return cachedEmbedder;
       })
       .catch(error => {
