@@ -46,6 +46,12 @@ test('invalid vectors and disabled persistence fall back to inference and cache 
     const record = (await readdir(dir)).find(name => name.endsWith('.json'))!;
     await writeFile(join(dir, record), JSON.stringify({ format: 1, model: 'model:q8', vector: [NaN] }));
     await cache.embed([source], { sourceStartIndex: 0 });
+    // A finite but wrong-dimensional cache vector must also be rejected.
+    const callsBeforeDimensionCheck = calls.length;
+    await writeFile(join(dir, record), JSON.stringify({ format: 1, model: 'model:q8', vector: [1, 2, 3] }));
+    await new PersistentCachingEmbedder(fake(calls), 'model:q8', dir, 2)
+      .embed([source], { sourceStartIndex: 0 });
+    assert.equal(calls.length, callsBeforeDimensionCheck + 1);
     await writeFile(join(dir, 'unrelated.txt'), 'must survive');
     await cache.clear();
     assert.deepEqual(await readdir(dir).catch(() => []), ['unrelated.txt']);
