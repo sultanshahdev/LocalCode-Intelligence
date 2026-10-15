@@ -35,7 +35,7 @@ const REPO_COMMITS: Record<string, string> = {
   localcode: 'c4bebd4b1d39179d7f5503db24155c3720f47bd0',
 };
 
-export type PipelineConfig = 'semantic-only' | 'earlier-hybrid' | 'corrected-hybrid';
+export type PipelineConfig = 'semantic-only' | 'earlier-hybrid' | 'corrected-hybrid' | 'merged-baseline' | 'intent-aware';
 
 export interface QueryEvaluationResult {
   queryId: string;
@@ -71,6 +71,7 @@ export interface BenchmarkMetrics {
   meanLatencyMs: number;
   modelInitLatencyMs: number;
   memoryUsageMb: number;
+  rssMemoryMb: number;
   repoCoverage: Record<string, { filesProcessed: number; regions: number; warnings: number }>;
   results: QueryEvaluationResult[];
 }
@@ -134,8 +135,8 @@ async function semanticOnlySearch(query: string, regions: readonly SourceRegion[
   };
 }
 
-async function correctedHybridSearch(query: string, regions: readonly SourceRegion[], embedder: Embedder) {
-  const retrieved = await retrieveHybridCandidates(query, regions, embedder, 5);
+async function correctedHybridSearch(query: string, regions: readonly SourceRegion[], embedder: Embedder, intentReranking = true) {
+  const retrieved = await retrieveHybridCandidates(query, regions, embedder, 5, { intentReranking });
   const selection = selectDisplayCandidates(retrieved);
   const relevance = assessRelevance(query, selection.candidates);
   return {
@@ -144,35 +145,22 @@ async function correctedHybridSearch(query: string, regions: readonly SourceRegi
   };
 }
 
-export async function runBenchmark(config: PipelineConfig, embedder: Embedder, modelInitLatencyMs: number): Promise<BenchmarkMetrics> {
+export async function runBenchmark(
+  config: PipelineConfig, embedder: Embedder, modelInitLatencyMs: number,
+  scopes: Readonly<Record<string, SourceScope>>,
+): Promise<BenchmarkMetrics> {
   console.log(`\n========================================================`);
   console.log(`RUNNING BENCHMARK: ${config.toUpperCase()}`);
   console.log(`========================================================\n`);
 
-  // Load scopes
-  console.log('Loading repository source scopes...');
-  const scopes: Record<string, SourceScope> = {};
   const repoCoverage: BenchmarkMetrics['repoCoverage'] = {};
-
-  for (const [repoKey, repoPath] of Object.entries(REPO_PATHS)) {
-    if (!SELECTED_REPOS.includes(repoKey)) continue;
-    let checkedOutCommit: string;
-    try {
-      checkedOutCommit = execFileSync('git', ['-C', repoPath, 'rev-parse', 'HEAD'], { encoding: 'utf8', timeout: 10_000 }).trim();
-    } catch {
-      throw new Error(`Missing or unreadable benchmark checkout for ${repoKey}: ${repoPath}`);
-    }
-    if (checkedOutCommit !== REPO_COMMITS[repoKey]) {
-      throw new Error(`Wrong revision for ${repoKey}: expected ${REPO_COMMITS[repoKey]}, found ${checkedOutCommit}. Do not evaluate unpinned source.`);
-    }
-    const scope = await prepareSourceScope(repoPath);
-    scopes[repoKey] = scope;
-    repoCoverage[repoKey] = {
+  for (const [repo, scope] of Object.entries(scopes)) {
+    repoCoverage[repo] = {
       filesProcessed: scope.filesProcessed,
       regions: scope.regions.length,
       warnings: scope.warnings.length,
     };
-    console.log(`  ${repoKey}: ${scope.filesProcessed} files, ${scope.regions.length} regions`);
+    console.log(`  ${repo}: ${scope.filesProcessed} files, ${scope.regions.length} regions`);
   }
   console.log('');
 
@@ -192,8 +180,10 @@ export async function runBenchmark(config: PipelineConfig, embedder: Embedder, m
       searchResult = await semanticOnlySearch(item.query, scope.regions, embedder);
     } else if (config === 'earlier-hybrid') {
       searchResult = await earlierHybridSearch(item.query, scope.regions, embedder);
+    } else if (config === 'merged-baseline') {
+      searchResult = await correctedHybridSearch(item.query, scope.regions, embedder, false);
     } else {
-      searchResult = await correctedHybridSearch(item.query, scope.regions, embedder);
+      searchResult = await correctedHybridSearch(item.query, scope.regions, embedder, true);
     }
 
     const latencyMs = performance.now() - tStart;
@@ -277,6 +267,7 @@ export async function runBenchmark(config: PipelineConfig, embedder: Embedder, m
 
   const meanLatency = results.reduce((acc, r) => acc + r.retrievalLatencyMs, 0) / (results.length || 1);
   const memUsageMb = process.memoryUsage().heapUsed / 1024 / 1024;
+  const rssMemoryMb = process.memoryUsage().rss / 1024 / 1024;
 
   return {
     config,
@@ -292,9 +283,30 @@ export async function runBenchmark(config: PipelineConfig, embedder: Embedder, m
     meanLatencyMs: meanLatency,
     modelInitLatencyMs,
     memoryUsageMb: memUsageMb,
+    rssMemoryMb,
     repoCoverage,
     results,
   };
+}
+
+async function loadScopes(): Promise<Record<string, SourceScope>> {
+  const scopes: Record<string, SourceScope> = {};
+  for (const repo of SELECTED_REPOS) {
+    const repoPath = REPO_PATHS[repo]!;
+    let actualSha: string;
+    try {
+      actualSha = execFileSync('git', ['-C', repoPath, 'rev-parse', 'HEAD'], {
+        encoding: 'utf8', timeout: 10_000,
+      }).trim();
+    } catch {
+      throw new Error('Benchmark checkout missing or invalid: ' + repoPath);
+    }
+    if (actualSha !== REPO_COMMITS[repo]) {
+      throw new Error('Pinned SHA mismatch for ' + repo + ': expected ' + REPO_COMMITS[repo] + ', found ' + actualSha);
+    }
+    scopes[repo] = await prepareSourceScope(repoPath);
+  }
+  return scopes;
 }
 
 async function main() {
@@ -304,47 +316,74 @@ async function main() {
   if (!['all', 'tuning', 'evaluation'].includes(SELECTED_SPLIT)) {
     throw new Error('LOCALCODE_BENCHMARK_SPLIT must be all, tuning, or evaluation.');
   }
-  console.log(`Benchmark checkout root: ${REPO_ROOT}`);
-  console.log(`Selected repositories: ${SELECTED_REPOS.join(', ')}`);
-  console.log(`Query split: ${SELECTED_SPLIT}`);
-  const configs: PipelineConfig[] = ['semantic-only', 'earlier-hybrid', 'corrected-hybrid'];
-  const allMetrics: Record<string, BenchmarkMetrics> = {};
+  const allowedConfigs: PipelineConfig[] = ['merged-baseline', 'intent-aware', 'semantic-only', 'earlier-hybrid', 'corrected-hybrid'];
+  const configs = (process.env['LOCALCODE_BENCHMARK_CONFIGS'] ?? 'merged-baseline,intent-aware')
+    .split(',').map(item => item.trim()).filter(Boolean) as PipelineConfig[];
+  if (configs.length === 0 || configs.some(config => !allowedConfigs.includes(config))) {
+    throw new Error('LOCALCODE_BENCHMARK_CONFIGS accepts: ' + allowedConfigs.join(', '));
+  }
+  console.log('Benchmark checkout root: ' + REPO_ROOT);
+  console.log('Selected repositories: ' + SELECTED_REPOS.join(', '));
+  console.log('Query split: ' + SELECTED_SPLIT);
+  console.log('Pipeline configurations: ' + configs.join(', '));
+
+  console.log('Inspecting and verifying pinned source checkouts...');
+  const scopes = await loadScopes();
+  const selectedDataset = BENCHMARK_DATASET.filter(item =>
+    SELECTED_REPOS.includes(item.repo) && (SELECTED_SPLIT === 'all' || item.split === SELECTED_SPLIT));
+  if (selectedDataset.length === 0) throw new Error('No benchmark queries selected.');
 
   const tInit0 = performance.now();
   const rawEmbedder = await createLocalEmbedder();
   const modelInitLatencyMs = performance.now() - tInit0;
-  console.log(`Global Model initialized in ${(modelInitLatencyMs / 1000).toFixed(2)}s\n`);
+  console.log('Embedding model initialized in ' + (modelInitLatencyMs / 1000).toFixed(2) + 's');
 
+  // Embed the pinned corpus and selected queries ONCE, before measuring either
+  // configuration. This avoids configuration-order bias and the previous 3x
+  // repeated full-corpus CPU inference. Cache inputs must match retrieval.ts.
+  const embedder = new CachingEmbedder(rawEmbedder, 30_000);
+  const inputs = [...new Set([
+    ...selectedDataset.map(item => item.query),
+    ...Object.values(scopes).flatMap(scope =>
+      scope.regions.map(region => 'File: ' + region.filePath + '\n' + region.text)),
+  ])];
+  const warmStart = performance.now();
+  console.log('Precomputing ' + inputs.length + ' unique vectors once (bounded batches of 32)...');
+  for (let offset = 0; offset < inputs.length; offset += 32) {
+    await embedder.embed(inputs.slice(offset, offset + 32));
+    if ((offset + 32) % 320 === 0 || offset + 32 >= inputs.length) {
+      console.log('  vectors prepared: ' + Math.min(offset + 32, inputs.length) + '/' + inputs.length);
+    }
+  }
+  const prewarmMs = performance.now() - warmStart;
+  console.log('Precompute completed in ' + (prewarmMs / 1000).toFixed(2) + 's');
+  const allMetrics: Partial<Record<PipelineConfig, BenchmarkMetrics>> = {};
   for (const cfg of configs) {
-    // Cache source vectors independently for each configuration: each configuration
-    // pays its own first-embedding cost, then reuses unchanged code regions.
-    const cachedEmbedder = new CachingEmbedder(rawEmbedder, 20_000);
-    allMetrics[cfg] = await runBenchmark(cfg, cachedEmbedder, modelInitLatencyMs);
+    allMetrics[cfg] = await runBenchmark(cfg, embedder, modelInitLatencyMs, scopes);
   }
 
-  // Save raw json output
   const reportPath = process.env['LOCALCODE_BENCHMARK_OUTPUT'] ?? '/tmp/benchmark-metrics.json';
-  writeFileSync(reportPath, JSON.stringify({ repositoryCommits: Object.fromEntries(SELECTED_REPOS.map(repo => [repo, REPO_COMMITS[repo]])), selectedSplit: SELECTED_SPLIT, metrics: allMetrics }, null, 2));
-  console.log(`Machine-readable metrics: ${reportPath}`);
-
-  console.log('\n========================================================');
-  console.log('SUMMARY COMPARISON REPORT');
-  console.log('========================================================\n');
-
-  console.log('Metric                     | Semantic-Only | Earlier-Hybrid | Corrected-Hybrid');
-  console.log('---------------------------|---------------|----------------|-----------------');
-  console.log(`Recall@1                   | ${(allMetrics['semantic-only']!.recallAt1 * 100).toFixed(1).padStart(11)}%  | ${(allMetrics['earlier-hybrid']!.recallAt1 * 100).toFixed(1).padStart(12)}%  | ${(allMetrics['corrected-hybrid']!.recallAt1 * 100).toFixed(1).padStart(14)}%`);
-  console.log(`Recall@5                   | ${(allMetrics['semantic-only']!.recallAt5 * 100).toFixed(1).padStart(11)}%  | ${(allMetrics['earlier-hybrid']!.recallAt5 * 100).toFixed(1).padStart(12)}%  | ${(allMetrics['corrected-hybrid']!.recallAt5 * 100).toFixed(1).padStart(14)}%`);
-  console.log(`MRR@5                     | ${allMetrics['semantic-only']!.mrrAt5.toFixed(3).padStart(13)} | ${allMetrics['earlier-hybrid']!.mrrAt5.toFixed(3).padStart(14)} | ${allMetrics['corrected-hybrid']!.mrrAt5.toFixed(3).padStart(16)}`);
-  console.log(`False Negative Rate (pos)  | ${(allMetrics['semantic-only']!.falseNegativeRate * 100).toFixed(1).padStart(11)}%  | ${(allMetrics['earlier-hybrid']!.falseNegativeRate * 100).toFixed(1).padStart(12)}%  | ${(allMetrics['corrected-hybrid']!.falseNegativeRate * 100).toFixed(1).padStart(14)}%`);
-  console.log(`False Positive Rate (neg)  | ${(allMetrics['semantic-only']!.falsePositiveRate * 100).toFixed(1).padStart(11)}%  | ${(allMetrics['earlier-hybrid']!.falsePositiveRate * 100).toFixed(1).padStart(12)}%  | ${(allMetrics['corrected-hybrid']!.falsePositiveRate * 100).toFixed(1).padStart(14)}%`);
-  console.log(`Correct Abstention (neg)   | ${(allMetrics['semantic-only']!.correctAbstentionRate * 100).toFixed(1).padStart(11)}%  | ${(allMetrics['earlier-hybrid']!.correctAbstentionRate * 100).toFixed(1).padStart(12)}%  | ${(allMetrics['corrected-hybrid']!.correctAbstentionRate * 100).toFixed(1).padStart(14)}%`);
-  console.log(`Mean Latency               | ${allMetrics['semantic-only']!.meanLatencyMs.toFixed(1).padStart(11)}ms | ${allMetrics['earlier-hybrid']!.meanLatencyMs.toFixed(1).padStart(12)}ms | ${allMetrics['corrected-hybrid']!.meanLatencyMs.toFixed(1).padStart(14)}ms`);
-  console.log(`Memory Usage (Heap)        | ${allMetrics['semantic-only']!.memoryUsageMb.toFixed(1).padStart(11)}MB | ${allMetrics['earlier-hybrid']!.memoryUsageMb.toFixed(1).padStart(12)}MB | ${allMetrics['corrected-hybrid']!.memoryUsageMb.toFixed(1).padStart(14)}MB`);
-
-  console.log('\nBenchmark evaluation complete.');
+  writeFileSync(reportPath, JSON.stringify({
+    repositoryCommits: Object.fromEntries(SELECTED_REPOS.map(repo => [repo, REPO_COMMITS[repo]])),
+    selectedSplit: SELECTED_SPLIT,
+    queryCount: selectedDataset.length,
+    prewarmMs,
+    configs,
+    metrics: allMetrics,
+  }, null, 2));
+  console.log('\nSUMMARY — warm-cache retrieval, same pinned vectors for every configuration');
+  for (const cfg of configs) {
+    const v = allMetrics[cfg]!;
+    console.log('\n' + cfg + ' (' + v.totalQueries + ' queries; ' + v.positiveQueries + ' positive, ' + v.negativeQueries + ' negative)');
+    console.log('  Recall@1: ' + (v.recallAt1 * 100).toFixed(1) + '% | Recall@5: ' + (v.recallAt5 * 100).toFixed(1) + '% | MRR@5: ' + v.mrrAt5.toFixed(3));
+    console.log('  FNR: ' + (v.falseNegativeRate * 100).toFixed(1) + '% | FPR: ' + (v.falsePositiveRate * 100).toFixed(1) + '%');
+    console.log('  Warm query mean: ' + v.meanLatencyMs.toFixed(1) + 'ms | heap: ' + v.memoryUsageMb.toFixed(1) + ' MiB | RSS snapshot: ' + v.rssMemoryMb.toFixed(1) + ' MiB');
+  }
+  console.log('\nModel startup: ' + modelInitLatencyMs.toFixed(1) + 'ms | source/query precompute: ' + prewarmMs.toFixed(1) + 'ms');
+  console.log('Memory figures are snapshots, not peak RSS; file-level labels are not implementation-level verification.');
+  console.log('Machine-readable metrics: ' + reportPath);
 }
 
 if (process.argv[1] && import.meta.url.endsWith(process.argv[1])) {
-  void main();
+  void main().catch(error => { console.error(error); process.exitCode = 1; });
 }
