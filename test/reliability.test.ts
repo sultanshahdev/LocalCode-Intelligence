@@ -20,9 +20,9 @@ async function withServer(
   try { await run(address.port); } finally { await new Promise<void>(resolve => server.close(() => resolve())); }
 }
 
-async function post(port: number, body: string, contentType = 'application/json'): Promise<{ status: number; body: string }> {
+async function post(port: number, body: string, contentType = 'application/json', path = '/api/search'): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
-    const req = request({ port, host: '127.0.0.1', path: '/api/search', method: 'POST', headers: { 'Content-Type': contentType } }, res => {
+    const req = request({ port, host: '127.0.0.1', path, method: 'POST', headers: { 'Content-Type': contentType } }, res => {
       let result = '';
       res.on('data', chunk => { result += chunk; });
       res.on('end', () => resolve({ status: res.statusCode ?? 0, body: result }));
@@ -50,6 +50,23 @@ test('HTTP JSON endpoints reject malformed, oversized, and unsupported content s
     });
     assert.deepEqual(missing, { status: 404, body: '{"error":"Unknown API route: /api/missing"}' });
   });
+});
+
+test('repository navigator lists ordered supported relative files and preserves source guards', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'localcode-navigator-'));
+  try {
+    await writeFile(join(directory, 'z.js'), 'export const z = 1;');
+    await (await import('node:fs/promises')).mkdir(join(directory, 'src'));
+    await writeFile(join(directory, 'src', 'a.ts'), 'export const a = 1;');
+    await writeFile(join(directory, 'README.md'), 'not source');
+    await withServer(async port => {
+      const listed = JSON.parse((await post(port, JSON.stringify({ repositoryPath: directory }), 'application/json', '/api/repositories/files')).body);
+      assert.deepEqual(listed.files, ['src/a.ts', 'z.js']);
+      const blocked = JSON.parse((await post(port, JSON.stringify({ repositoryPath: directory, filePath: '../secret.ts', startLine: 1, endLine: 1 }), 'application/json', '/api/source')).body);
+      assert.equal(blocked.ok, false);
+      assert.match(blocked.message, /relative source paths/);
+    });
+  } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
 test('an aborted body does not prevent a subsequent request from completing', async () => {

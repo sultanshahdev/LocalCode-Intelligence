@@ -71,6 +71,9 @@ async function run() {
       return reply(route, { ok: true, outcome: 'candidates', candidates: [candidate],
         withheldCandidates: 0, scope: { filesProcessed: 2, filesDiscovered: 2, warnings: [] } });
     }
+    if (endpoint === '/api/repositories/files') {
+      return reply(route, { ok: true, files: ['src/auth.ts', 'src/search.ts'], truncated: false });
+    }
     if (endpoint === '/api/source') {
       return reply(route, { ok: true, filePath: body.filePath,
         startLine: body.startLine, endLine: body.endLine, totalLines: 30,
@@ -83,6 +86,10 @@ async function run() {
   await page.getByRole('textbox', { name: 'Repository path' }).fill(LOCAL);
   await page.getByRole('button', { name: 'Check Repository' }).click();
   await page.getByText('Ready for search').waitFor();
+  await page.getByRole('button', { name: /auth\.ts/ }).click();
+  await page.getByRole('dialog', { name: 'Source viewer' }).waitFor();
+  await page.getByRole('button', { name: 'Close source viewer' }).click();
+  console.log('PASS repository navigator opens a listed file');
   await page.getByRole('textbox', { name: 'Search query' }).fill('verifyToken');
   await page.getByRole('button', { name: 'Search', exact: true }).click();
   await page.locator('.card').first().waitFor();
