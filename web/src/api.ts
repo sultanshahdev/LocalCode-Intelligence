@@ -92,6 +92,7 @@ export async function apiSource(
   filePath: string,
   startLine: number,
   endLine: number,
+  context = 25,
 ): Promise<SourceResponse> {
-  return post<SourceResponse>('/source', { repositoryPath, filePath, startLine, endLine });
+  return post<SourceResponse>('/source', { repositoryPath, filePath, startLine, endLine, context });
 }
