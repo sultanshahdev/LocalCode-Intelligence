@@ -64,6 +64,24 @@ test('behavioral implementation intent ranks defining logic above an incidental 
   assert.equal(result[0]?.filePath, 'src/search-execution.ts');
 });
 
+test('benchmark can compare merged ranking with intent-aware ranking using identical vectors', async () => {
+  const regions = [
+    { filePath: 'src/concurrency-notes.ts', startLine: 1, endLine: 2,
+      text: '// Where search concurrency is bounded to prevent overload' },
+    { filePath: 'src/unrelated-handler.ts', startLine: 1, endLine: 3,
+      text: 'export function calculatePrice() { if (true) return 42; }' },
+  ];
+  const embedder = { embed: async () => [[1, 0], [1, 0], [0, 1]] };
+  const query = 'Where is search concurrency bounded to prevent overload?';
+
+  const mergedBaseline = await retrieveHybridCandidates(query, regions, embedder, 5, { intentReranking: false });
+  const proposal = await retrieveHybridCandidates(query, regions, embedder);
+  assert.equal(mergedBaseline[0]?.filePath, 'src/concurrency-notes.ts');
+  assert.equal(proposal[0]?.filePath, 'src/unrelated-handler.ts');
+  // The experimental preference can overwhelm retrieval evidence, so this
+  // flag must remain available for a fair benchmark before release.
+});
+
 test('explicit test and example intents retain their matching file roles', async () => {
   const regions = [
     { filePath: 'src/validation.ts', startLine: 1, endLine: 3, text: 'export function validateRequest() { if (!request) throw new Error(); }' },
