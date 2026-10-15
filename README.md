@@ -108,6 +108,8 @@ node dist/src/cli.js search "your query" --repo /path/to/repo
 
 ## API
 
+JSON API requests must use `Content-Type: application/json` and are limited to 64 KiB. Invalid JSON returns `400`, oversized bodies return `413`, and unsupported content types return `415`, each with a JSON error body. Semantic searches are intentionally serialized because inference is CPU-intensive: one search runs, up to two wait for at most 30 seconds, and further requests receive `503` with `Retry-After: 5`. Health, repository-status, source-view, and static requests are not queued.
+
 The server binds exclusively to `127.0.0.1:4317` (localhost only).
 
 | Method | Route | Description |
@@ -168,6 +170,8 @@ The server binds exclusively to `127.0.0.1:4317` (localhost only).
 
 On the included three-region fixture with the local quantized model already initialized, a measured cold retrieval took 96 ms and the identical warm retrieval took 2 ms: 4 texts embedded initially, then 4 cache hits and 0 new texts. After editing one source file, the next retrieval embedded only its changed region (1 miss, 3 hits) in 23 ms.
 
+On a temporary 60-file TypeScript fixture (120 regions) with the model already initialized, cold retrieval was 15,465 ms for 121 embeddings; the identical warm retrieval was 82 ms (121 hits); a different query was 56 ms (120 region hits and one query miss). The benchmark process RSS was approximately 1,180 MiB after inference. These are development-laptop measurements, not API end-to-end latency or a memory guarantee.
+
 ---
 
 ## Current Limitations
@@ -175,6 +179,7 @@ On the included three-region fixture with the local quantized model already init
 - **JavaScript/TypeScript only** — no support for other languages
 - **No persistent index** — source is still discovered on every request, so deleted files cannot be returned; changed or renamed regions receive new embeddings while unchanged regions reuse the process-local cache
 - **Scope limits**: max 500 files, 256 KB per file, 5 MB total source per search
+- **Bounded reads**: files over 256 KB are skipped from filesystem metadata before their contents are allocated; files changing during scanning are skipped with a coverage warning
 - **First search is slow** — model download + full-repo embedding can take 30–90 seconds on first run
 - **Unverified candidates** — semantic similarity is not functional correctness; results require manual review
 - **Localhost only** — not designed for multi-user or networked deployment
