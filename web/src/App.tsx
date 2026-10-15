@@ -1,0 +1,574 @@
+import React, { useState, useCallback, useEffect, useRef } from 'react';
+import {
+  apiRepoStatus,
+  apiSearch,
+  apiSource,
+  type SearchCandidate,
+  type RepoStatus,
+  type SearchResponse,
+  type SourceResponse,
+} from './api';
+
+// ── Escape-key hook ───────────────────────────────────────────────────────────
+
+function useEscapeKey(handler: () => void) {
+  useEffect(() => {
+    const listener = (e: KeyboardEvent) => { if (e.key === 'Escape') handler(); };
+    document.addEventListener('keydown', listener);
+    return () => document.removeEventListener('keydown', listener);
+  }, [handler]);
+}
+
+// ── Copy button ───────────────────────────────────────────────────────────────
+
+function CopyButton({ text, label = 'Copy' }: { text: string; label?: string }) {
+  const [state, setState] = useState<'idle' | 'copied'>('idle');
+  const copy = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    void navigator.clipboard.writeText(text).then(() => {
+      setState('copied');
+      setTimeout(() => setState('idle'), 1600);
+    });
+  };
+  return (
+    <button
+      className={`copy-btn ${state === 'copied' ? 'copy-btn--done' : ''}`}
+      onClick={copy}
+      title={`Copy ${label}`}
+      aria-label={state === 'copied' ? 'Copied!' : `Copy ${label}`}
+    >
+      {state === 'copied' ? (
+        <><CheckIcon /> Copied</>
+      ) : (
+        <><CopyIcon /> {label}</>
+      )}
+    </button>
+  );
+}
+
+// ── Source viewer ─────────────────────────────────────────────────────────────
+
+interface SourceViewerProps {
+  repositoryPath: string;
+  candidate: SearchCandidate;
+  onClose: () => void;
+}
+
+function SourceViewer({ repositoryPath, candidate, onClose }: SourceViewerProps) {
+  const [sourceData, setSourceData] = useState<SourceResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const highlightRef = useRef<HTMLDivElement>(null);
+
+  const location = `${candidate.filePath}:${candidate.startLine}-${candidate.endLine}`;
+
+  useEscapeKey(onClose);
+
+  useEffect(() => {
+    setLoading(true);
+    setError(null);
+    setSourceData(null);
+    apiSource(repositoryPath, candidate.filePath, candidate.startLine, candidate.endLine, 25)
+      .then((result) => {
+        setSourceData(result);
+        if (!result.ok) setError(result.message ?? 'Source read failed');
+      })
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Unknown error'))
+      .finally(() => setLoading(false));
+  }, [repositoryPath, candidate.filePath, candidate.startLine, candidate.endLine]);
+
+  // Scroll highlighted region into view once loaded
+  useEffect(() => {
+    if (sourceData?.ok && highlightRef.current) {
+      highlightRef.current.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
+  }, [sourceData]);
+
+  return (
+    <div className="overlay" onClick={onClose} role="dialog" aria-modal="true" aria-label="Source viewer">
+      <div className="source-viewer" onClick={(e) => e.stopPropagation()}>
+        {/* Header */}
+        <div className="sv-header">
+          <div className="sv-path-group">
+            <FileIcon />
+            <span className="sv-filepath">{candidate.filePath}</span>
+            <span className="sv-lines">:{candidate.startLine}–{candidate.endLine}</span>
+          </div>
+          <div className="sv-actions">
+            <CopyButton text={location} label="location" />
+            <button
+              className="sv-close"
+              onClick={onClose}
+              title="Close (Esc)"
+              aria-label="Close source viewer"
+            >
+              <CloseIcon />
+            </button>
+          </div>
+        </div>
+
+        {/* Snapshot notice */}
+        <div className="sv-notice">
+          <InfoIcon />
+          <span>Current file — content may differ from the search snapshot if the file was modified since indexing.</span>
+        </div>
+
+        {/* Body */}
+        <div className="sv-body">
+          {loading && (
+            <div className="sv-placeholder">
+              <Spinner /> Loading source…
+            </div>
+          )}
+          {error && (
+            <div className="sv-error">
+              <ErrorIcon /> {error}
+            </div>
+          )}
+          {!loading && !error && sourceData?.ok && sourceData.lines && (
+            <pre className="sv-code">
+              {sourceData.lines.map((line, idx) => {
+                const lineNum = (sourceData.startLine ?? candidate.startLine) + idx;
+                const isHighlighted = lineNum >= candidate.startLine && lineNum <= candidate.endLine;
+                return (
+                  <div
+                    key={lineNum}
+                    ref={isHighlighted && lineNum === candidate.startLine ? highlightRef : undefined}
+                    className={`sv-line${isHighlighted ? ' sv-line--hl' : ''}`}
+                  >
+                    <span className="sv-ln">{lineNum}</span>
+                    <span className="sv-lc">{line}</span>
+                  </div>
+                );
+              })}
+            </pre>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Result card ───────────────────────────────────────────────────────────────
+
+interface ResultCardProps {
+  candidate: SearchCandidate;
+  index: number;
+  onViewSource: (c: SearchCandidate) => void;
+}
+
+function ResultCard({ candidate, index, onViewSource }: ResultCardProps) {
+  const location = `${candidate.filePath}:${candidate.startLine}-${candidate.endLine}`;
+  const score = candidate.score;
+  const scorePct = Math.round(score * 100);
+  const tier = scorePct >= 65 ? 'high' : scorePct >= 35 ? 'mid' : 'low';
+
+  // Split path for better display: dir prefix + filename
+  const lastSlash = candidate.filePath.lastIndexOf('/');
+  const dir = lastSlash >= 0 ? candidate.filePath.slice(0, lastSlash + 1) : '';
+  const filename = lastSlash >= 0 ? candidate.filePath.slice(lastSlash + 1) : candidate.filePath;
+
+  return (
+    <article className="card">
+      <div className="card-header">
+        <div className="card-rank" aria-label={`Result ${index + 1}`}>
+          {index + 1}
+        </div>
+        <div className="card-meta">
+          <div className="card-path">
+            {dir && <span className="card-dir">{dir}</span>}
+            <span className="card-filename">{filename}</span>
+          </div>
+          <div className="card-location-row">
+            <span className="card-lines">lines {candidate.startLine}–{candidate.endLine}</span>
+            <span className={`score-pill score-pill--${tier}`} title={`Cosine similarity (ranking signal, not a probability): ${score.toFixed(4)}`}>
+              Similarity {score.toFixed(3)}
+            </span>
+          </div>
+        </div>
+        <div className="card-actions">
+          <CopyButton text={location} label="path" />
+          <button
+            className="btn-view"
+            onClick={() => onViewSource(candidate)}
+            aria-label={`View source for ${candidate.filePath}`}
+          >
+            View Source
+          </button>
+        </div>
+      </div>
+
+      <div className="card-excerpt-wrap">
+        <pre className="card-excerpt">{candidate.text}</pre>
+      </div>
+
+      <div className="card-footer">
+        Unverified semantic candidate — similarity is a ranking signal, not a confidence score.
+      </div>
+    </article>
+  );
+}
+
+// ── Repo status display ───────────────────────────────────────────────────────
+
+function RepoStatusDisplay({ status, resolvedPath }: { status: RepoStatus; resolvedPath: string }) {
+  return (
+    <div className="repo-status">
+      <div className="status-grid">
+        <StatusRow label="Eligibility" value={
+          <span className={status.eligible ? 'tag tag--ok' : 'tag tag--warn'}>
+            {status.eligible ? 'Ready for search' : 'No searchable source'}
+          </span>
+        } />
+        <StatusRow label="Coverage" value={
+          <span className={status.coverage === 'complete' ? 'tag tag--ok' : 'tag tag--warn'}>
+            {status.coverage}
+          </span>
+        } />
+        <StatusRow label="Source files" value={
+          <span className="status-val">
+            {status.filesProcessed}
+            {status.filesDiscovered > status.filesProcessed && (
+              <span className="status-val-dim"> / {status.filesDiscovered} discovered</span>
+            )}
+          </span>
+        } />
+        {resolvedPath && (
+          <StatusRow label="Resolved path" value={
+            <code className="status-path">{resolvedPath}</code>
+          } />
+        )}
+      </div>
+      {status.warnings.length > 0 && (
+        <div className="status-warnings">
+          {status.warnings.map((w, i) => (
+            <div key={i} className="status-warn-item">
+              <WarningIcon /> {w}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StatusRow({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="status-row">
+      <dt className="status-key">{label}</dt>
+      <dd className="status-val-wrap">{value}</dd>
+    </div>
+  );
+}
+
+// ── Search scope summary ──────────────────────────────────────────────────────
+
+function SearchMeta({ result }: { result: SearchResponse }) {
+  if (!result.ok || !result.scope) return null;
+  return (
+    <div className="search-meta">
+      <span>
+        Searched <strong>{result.scope.filesProcessed}</strong> file{result.scope.filesProcessed !== 1 ? 's' : ''}
+      </span>
+      {(result.withheldCandidates ?? 0) > 0 && (
+        <span className="meta-dim">
+          · {result.withheldCandidates} candidate{result.withheldCandidates !== 1 ? 's' : ''} withheld (non-positive alignment)
+        </span>
+      )}
+      {result.scope.warnings.map((w, i) => (
+        <span key={i} className="meta-warn"><WarningIcon /> {w}</span>
+      ))}
+    </div>
+  );
+}
+
+// ── Main App ──────────────────────────────────────────────────────────────────
+
+export default function App() {
+  const [repoPath, setRepoPath] = useState('');
+  const [repoStatus, setRepoStatus] = useState<RepoStatus | null>(null);
+  const [repoError, setRepoError] = useState<string | null>(null);
+  const [repoLoading, setRepoLoading] = useState(false);
+  const [resolvedPath, setResolvedPath] = useState('');
+
+  const [query, setQuery] = useState('');
+  const [searchResult, setSearchResult] = useState<SearchResponse | null>(null);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+
+  const [activeSource, setActiveSource] = useState<SearchCandidate | null>(null);
+
+  const queryInputRef = useRef<HTMLInputElement>(null);
+
+  const handleCheckRepo = useCallback(async () => {
+    const path = repoPath.trim();
+    if (!path) return;
+    setRepoLoading(true);
+    setRepoError(null);
+    setRepoStatus(null);
+    setResolvedPath('');
+    setSearchResult(null);
+    setActiveSource(null);
+    try {
+      const result = await apiRepoStatus(path);
+      if (result.ok && result.status) {
+        setRepoStatus(result.status);
+        setResolvedPath(result.resolvedPath ?? path);
+        // Focus search input if eligible
+        if (result.status.eligible) {
+          setTimeout(() => queryInputRef.current?.focus(), 100);
+        }
+      } else {
+        setRepoError(result.message ?? 'Repository check failed');
+      }
+    } catch (e) {
+      setRepoError(e instanceof Error ? e.message : 'Network error — is the server running?');
+    } finally {
+      setRepoLoading(false);
+    }
+  }, [repoPath]);
+
+  const handleSearch = useCallback(async () => {
+    const q = query.trim();
+    if (!q || !resolvedPath) return;
+    setSearchLoading(true);
+    setSearchError(null);
+    setSearchResult(null);
+    setActiveSource(null);
+    try {
+      const result = await apiSearch(q, resolvedPath);
+      setSearchResult(result);
+      if (!result.ok) setSearchError(result.message ?? 'Search failed');
+    } catch (e) {
+      setSearchError(e instanceof Error ? e.message : 'Network error — is the server running?');
+    } finally {
+      setSearchLoading(false);
+    }
+  }, [query, resolvedPath]);
+
+  const canSearch = !!repoStatus?.eligible && !!resolvedPath;
+  const hasResults = !!(searchResult?.ok && (searchResult.candidates?.length ?? 0) > 0);
+
+  return (
+    <div className="app">
+      {/* ── Header ── */}
+      <header className="app-header">
+        <div className="header-inner">
+          <div className="brand">
+            <span className="brand-mark" aria-hidden="true">{'</>'}</span>
+            <span className="brand-name">LocalCode Intelligence</span>
+          </div>
+          <span className="brand-sub">local-first semantic code search</span>
+        </div>
+      </header>
+
+      <main className="app-main">
+
+        {/* ── Step 1: Repository ── */}
+        <section className="section">
+          <div className="section-label">
+            <StepBadge n={1} done={!!repoStatus} />
+            <span>Repository</span>
+          </div>
+
+          <div className="field-row">
+            <input
+              className="field-input"
+              type="text"
+              placeholder="Absolute path to local repository, e.g. /home/user/my-project"
+              value={repoPath}
+              onChange={(e) => setRepoPath(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') void handleCheckRepo(); }}
+              aria-label="Repository path"
+              spellCheck={false}
+              autoComplete="off"
+            />
+            <button
+              className="btn btn--primary"
+              onClick={() => void handleCheckRepo()}
+              disabled={repoLoading || !repoPath.trim()}
+            >
+              {repoLoading ? <><Spinner />Checking…</> : 'Check Repository'}
+            </button>
+          </div>
+
+          {repoError && (
+            <div className="inline-error" role="alert">
+              <ErrorIcon /> {repoError}
+            </div>
+          )}
+
+          {repoStatus && (
+            <RepoStatusDisplay status={repoStatus} resolvedPath={resolvedPath} />
+          )}
+        </section>
+
+        {/* ── Step 2: Search ── */}
+        <section className={`section${!canSearch ? ' section--locked' : ''}`} aria-disabled={!canSearch}>
+          <div className="section-label">
+            <StepBadge n={2} done={hasResults} />
+            <span>Search</span>
+            {!canSearch && <span className="section-hint">— check a repository first</span>}
+          </div>
+
+          <div className="field-row">
+            <input
+              ref={queryInputRef}
+              className="field-input"
+              type="text"
+              placeholder={
+                canSearch
+                  ? 'Describe what you\'re looking for in natural language…'
+                  : 'Select a valid repository above to enable search'
+              }
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') void handleSearch(); }}
+              disabled={!canSearch}
+              aria-label="Search query"
+              spellCheck={false}
+            />
+            <button
+              className="btn btn--primary"
+              onClick={() => void handleSearch()}
+              disabled={!canSearch || searchLoading || !query.trim()}
+            >
+              {searchLoading ? <><Spinner />Searching…</> : 'Search'}
+            </button>
+          </div>
+
+          {searchLoading && (
+            <div className="loading-notice" role="status" aria-live="polite">
+              <Spinner />
+              <div>
+                <div>Running local inference…</div>
+                <div className="loading-sub">
+                  First run downloads the embedding model (~23 MB). Subsequent runs use the cache.
+                </div>
+              </div>
+            </div>
+          )}
+
+          {searchError && (
+            <div className="inline-error" role="alert">
+              <ErrorIcon /> {searchError}
+            </div>
+          )}
+
+          {searchResult?.ok && <SearchMeta result={searchResult} />}
+
+          {searchResult?.ok && searchResult.outcome === 'no-supported-candidate' && (
+            <div className="empty-state">
+              <div className="empty-state-title">No candidates found</div>
+              <div className="empty-state-body">
+                The search completed but no retrieved region had positive cosine alignment with your query.
+                Try rephrasing or broadening your description. This does not confirm the behavior is absent from the repository.
+              </div>
+            </div>
+          )}
+
+          {hasResults && (
+            <div className="results">
+              {searchResult!.candidates!.map((candidate, i) => (
+                <ResultCard
+                  key={`${candidate.filePath}:${candidate.startLine}`}
+                  candidate={candidate}
+                  index={i}
+                  onViewSource={setActiveSource}
+                />
+              ))}
+              <p className="results-disclaimer">
+                Results are unverified semantic candidates. Similarity scores are ranking signals — not confidence or probability estimates.
+              </p>
+            </div>
+          )}
+        </section>
+
+      </main>
+
+      {/* ── Source viewer overlay ── */}
+      {activeSource && (
+        <SourceViewer
+          repositoryPath={resolvedPath}
+          candidate={activeSource}
+          onClose={() => setActiveSource(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── Small icon components (inline SVG, no deps) ───────────────────────────────
+
+function StepBadge({ n, done }: { n: number; done: boolean }) {
+  return (
+    <span className={`step-badge${done ? ' step-badge--done' : ''}`} aria-hidden="true">
+      {done ? '✓' : n}
+    </span>
+  );
+}
+
+function Spinner() {
+  return <span className="spinner" aria-hidden="true" />;
+}
+
+function FileIcon() {
+  return (
+    <svg className="icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M3 2h7l3 3v9H3V2z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round"/>
+      <path d="M10 2v3h3" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round"/>
+    </svg>
+  );
+}
+
+function CopyIcon() {
+  return (
+    <svg className="icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <rect x="5" y="5" width="8" height="9" rx="1" stroke="currentColor" strokeWidth="1.2"/>
+      <path d="M3 11V2h8" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round"/>
+    </svg>
+  );
+}
+
+function CheckIcon() {
+  return (
+    <svg className="icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M3 8l3.5 3.5L13 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
+  );
+}
+
+function CloseIcon() {
+  return (
+    <svg className="icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+    </svg>
+  );
+}
+
+function WarningIcon() {
+  return (
+    <svg className="icon icon--warn" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M8 2L14 13H2L8 2z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round"/>
+      <path d="M8 7v3M8 11.5v.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+    </svg>
+  );
+}
+
+function InfoIcon() {
+  return (
+    <svg className="icon icon--info" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.2"/>
+      <path d="M8 7v4M8 5.5v.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+    </svg>
+  );
+}
+
+function ErrorIcon() {
+  return (
+    <svg className="icon icon--error" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.2"/>
+      <path d="M5.5 5.5l5 5M10.5 5.5l-5 5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+    </svg>
+  );
+}
