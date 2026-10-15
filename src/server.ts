@@ -305,7 +305,7 @@ async function handleSource(req: IncomingMessage, res: ServerResponse): Promise<
 
 // ── Static frontend serving ───────────────────────────────────────────────────
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
-const STATIC_DIR = join(__dirname, '..', 'web', 'dist');
+const STATIC_DIR = join(__dirname, '..', '..', 'web', 'dist');
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
