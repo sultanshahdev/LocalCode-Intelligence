@@ -111,9 +111,9 @@ test('benchmark can compare merged ranking with intent-aware ranking using ident
   const mergedBaseline = await retrieveHybridCandidates(query, regions, embedder, 5, { intentReranking: false });
   const proposal = await retrieveHybridCandidates(query, regions, embedder);
   assert.equal(mergedBaseline[0]?.filePath, 'src/concurrency-notes.ts');
-  assert.equal(proposal[0]?.filePath, 'src/unrelated-handler.ts');
-  // The experimental preference can overwhelm retrieval evidence, so this
-  // flag must remain available for a fair benchmark before release.
+  assert.equal(proposal[0]?.filePath, 'src/concurrency-notes.ts');
+  // Unrelated executable structure is insufficient without query evidence.
+  // The merged-baseline option remains available for measured comparisons.
 });
 
 test('explicit test and example intents retain their matching file roles', async () => {
