@@ -879,3 +879,11 @@ body {
   outline: 2px solid var(--border-focus);
   outline-offset: 2px;
 }
+/* Repository navigator */
+.explorer { margin-top: 16px; border: 1px solid var(--border, #263346); border-radius: 10px; background: var(--surface, #111a27); max-height: 340px; overflow: auto; }
+.explorer-head { display:flex; justify-content:space-between; padding:10px 12px; color:var(--text, #e8eef8); }
+.explorer-filter { width:calc(100% - 24px); margin:0 12px 8px; box-sizing:border-box; }
+.explorer-dir summary { cursor:pointer; padding:7px 12px; color:var(--muted, #aab7c7); font-size:.85rem; }
+.explorer-file { width:100%; display:flex; gap:7px; align-items:center; border:0; background:transparent; color:var(--text, #e8eef8); text-align:left; padding:7px 18px 7px 28px; cursor:pointer; }
+.explorer-file:hover, .explorer-file:focus-visible { background:rgba(93, 173, 226, .14); outline:none; }
+.explorer-state { padding:12px; color:var(--muted, #aab7c7); display:flex; gap:8px; align-items:center; }

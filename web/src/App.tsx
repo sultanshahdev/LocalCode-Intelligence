@@ -4,11 +4,30 @@ import {
   apiPrepareRepository,
   apiSearch,
   apiSource,
+  apiRepositoryFiles,
   type SearchCandidate,
   type RepoStatus,
   type SearchResponse,
   type SourceResponse,
 } from './api';
+
+function FileExplorer({ files, loading, error, onOpen }: { files: string[]; loading: boolean; error: string | null; onOpen: (filePath: string) => void }) {
+  const [filter, setFilter] = useState('');
+  const visible = files.filter(file => file.toLowerCase().includes(filter.toLowerCase()));
+  const groups = new Map<string, string[]>();
+  visible.forEach(file => { const slash = file.lastIndexOf('/'); const dir = slash < 0 ? 'Repository root' : file.slice(0, slash); const names = groups.get(dir) ?? []; names.push(file); groups.set(dir, names); });
+  return <section className="explorer" aria-label="Repository files">
+    <div className="explorer-head"><strong>Files</strong><span>{files.length}</span></div>
+    <input className="explorer-filter" value={filter} onChange={e => setFilter(e.target.value)} placeholder="Filter files…" aria-label="Filter repository files" />
+    {loading && <div className="explorer-state"><Spinner /> Loading files…</div>}
+    {error && <div className="explorer-state" role="alert">{error}</div>}
+    {!loading && !error && visible.length === 0 && <div className="explorer-state">No matching source files.</div>}
+    {[...groups.entries()].map(([dir, entries]) => <details key={dir} open className="explorer-dir">
+      <summary>{dir}</summary>
+      {entries.map(file => <button key={file} className="explorer-file" onClick={() => onOpen(file)} title={file}><FileIcon /> <span>{file.slice(file.lastIndexOf('/') + 1)}</span></button>)}
+    </details>)}
+  </section>;
+}
 
 // ── Escape-key hook ───────────────────────────────────────────────────────────
 
@@ -310,6 +329,9 @@ export default function App() {
   const [searchError, setSearchError] = useState<string | null>(null);
 
   const [activeSource, setActiveSource] = useState<SearchCandidate | null>(null);
+  const [navigatorFiles, setNavigatorFiles] = useState<string[]>([]);
+  const [navigatorLoading, setNavigatorLoading] = useState(false);
+  const [navigatorError, setNavigatorError] = useState<string | null>(null);
 
   const queryInputRef = useRef<HTMLInputElement>(null);
 
@@ -326,6 +348,7 @@ export default function App() {
       setResolvedPath('');
       setSearchResult(null);
       setActiveSource(null);
+      setNavigatorFiles([]); setNavigatorError(null);
     }
     try {
       const result = await apiPrepareRepository(sourceType, path, refresh);
@@ -343,6 +366,12 @@ export default function App() {
         setResolvedPath(result.source?.label ?? result.resolvedPath ?? path);
         setRepositoryId(result.repositoryId);
         setGithubSource(result.source?.githubUrl && result.source.revision ? { url: result.source.githubUrl, revision: result.source.revision } : null);
+        setNavigatorLoading(true); setNavigatorError(null);
+        void apiRepositoryFiles(result.source?.label ?? result.resolvedPath ?? path, result.repositoryId).then(listing => {
+          if (current !== repositoryGeneration.current) return;
+          if (listing.ok) setNavigatorFiles(listing.files ?? []); else setNavigatorError(listing.message ?? 'Files are unavailable.');
+        }).catch(() => { if (current === repositoryGeneration.current) setNavigatorError('Files are unavailable.'); })
+          .finally(() => { if (current === repositoryGeneration.current) setNavigatorLoading(false); });
         // Focus search input if eligible
         if (result.status.eligible) {
           setTimeout(() => queryInputRef.current?.focus(), 100);
@@ -357,7 +386,7 @@ export default function App() {
     }
   }, [repoPath, sourceType]);
 
-  const invalidateRepository = () => { repositoryGeneration.current += 1; searchGeneration.current += 1; setRepoLoading(false); setSearchLoading(false); setRepositoryId(undefined); setRepoStatus(null); setResolvedPath(''); setGithubSource(null); setSearchResult(null); setSearchError(null); setRepoError(null); setActiveSource(null); };
+  const invalidateRepository = () => { repositoryGeneration.current += 1; searchGeneration.current += 1; setRepoLoading(false); setSearchLoading(false); setRepositoryId(undefined); setRepoStatus(null); setResolvedPath(''); setGithubSource(null); setSearchResult(null); setSearchError(null); setRepoError(null); setActiveSource(null); setNavigatorFiles([]); setNavigatorError(null); setNavigatorLoading(false); };
   const changeSource = (type: 'local' | 'github') => { invalidateRepository(); setSourceType(type); };
 
   const handleSearch = useCallback(async () => {
@@ -442,6 +471,7 @@ export default function App() {
           {repoStatus && (
             <RepoStatusDisplay status={repoStatus} resolvedPath={resolvedPath} />
           )}
+          {repoStatus && <FileExplorer files={navigatorFiles} loading={navigatorLoading} error={navigatorError} onOpen={(filePath) => setActiveSource({ filePath, startLine: 1, endLine: 1, text: '', score: 0 })} />}
         </section>
 
         {/* ── Step 2: Search ── */}

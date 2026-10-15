@@ -80,6 +80,7 @@ Open **http://127.0.0.1:4317** in your browser.
 4. **Click "Search"** — runs local embedding inference (first run downloads the model)
 5. **Review ranked results** — each card shows file, line range, similarity score, and a source excerpt
 6. **Click "View Source"** — opens a panel showing the actual current file content with your candidate region highlighted
+7. **Browse Files** — after preparation, use the collapsible Files navigator to filter supported JS/TS files and open them in the same source viewer
 
 > **Results are unverified semantic candidates.** Similarity scores are ranking signals, not confidence scores.  
 > A high score does not confirm the code does what your query describes.
@@ -129,6 +130,7 @@ The server binds exclusively to `127.0.0.1:4317` (localhost only).
 | `GET`  | `/api/health` | Service health check |
 | `POST` | `/api/repo/status` | Inspect repository source scope and file coverage |
 | `POST` | `/api/search` | Run semantic search (loads model on first call) |
+| `POST` | `/api/repositories/files` | List up to 500 safe, repository-relative source paths for navigation |
 | `POST` | `/api/source` | Read source file lines (read-only, path-safe) |
 
 ### POST /api/repo/status

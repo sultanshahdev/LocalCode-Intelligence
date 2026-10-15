@@ -59,6 +59,7 @@ export interface SourceResponse {
   notice?: string;
   message?: string;
 }
+export interface RepositoryFilesResponse { ok: boolean; files?: string[]; truncated?: boolean; message?: string; }
 
 // ── API client ────────────────────────────────────────────────────────────────
 
@@ -102,4 +103,7 @@ export async function apiSource(
   context = 25, repositoryId?: string,
 ): Promise<SourceResponse> {
   return post<SourceResponse>('/source', repositoryId ? { repositoryId, filePath, startLine, endLine, context } : { repositoryPath, filePath, startLine, endLine, context });
+}
+export async function apiRepositoryFiles(repositoryPath: string, repositoryId?: string): Promise<RepositoryFilesResponse> {
+  return post<RepositoryFilesResponse>('/repositories/files', repositoryId ? { repositoryId } : { repositoryPath });
 }

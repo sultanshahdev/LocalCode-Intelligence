@@ -15,7 +15,7 @@ import { validateRepositoryDirectory } from './repository.js';
 import { inspectRepositorySearchStatus } from './status.js';
 import { searchRepository } from './search.js';
 import { CachingEmbedder, createLocalEmbedder, type Embedder } from './retrieval.js';
-import { prepareSourceScope, DEFAULT_SOURCE_LIMITS } from './source.js';
+import { prepareSourceScope, DEFAULT_SOURCE_LIMITS, listNavigableSourceFiles } from './source.js';
 import { SearchExecutionController, SearchOverloadedError, SearchQueueAbortedError } from './search-execution.js';
 import { GitHubRepositoryAcquirer, GitHubRepositoryError } from './github-repository.js';
 
@@ -509,6 +509,22 @@ async function handleSource(req: IncomingMessage, res: ServerResponse): Promise<
   });
 }
 
+async function handleRepositoryFiles(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (!requiresJson(req, res)) return;
+  let body: unknown;
+  try { body = await readJsonBody(req); } catch (error) { sendBodyError(res, error); return; }
+  if (typeof body !== 'object' || body === null) { sendError(res, 400, 'Request body must be a JSON object'); return; }
+  const repositoryPath = resolvePrepared(body as { repositoryId?: unknown; repositoryPath?: unknown });
+  if (typeof repositoryPath !== 'string' || !repositoryPath.trim()) { sendError(res, 400, 'A prepared repository reference is required.'); return; }
+  const validation = await validateRepositoryDirectory(repositoryPath.trim());
+  if (!validation.ok) { sendJson(res, 200, { ok: false, message: validation.message }); return; }
+  try {
+    const listing = await listNavigableSourceFiles(validation.resolvedPath);
+    // Paths are bounded by source discovery and validated relative paths; never return absolute paths.
+    sendJson(res, 200, { ok: true, files: listing.files, truncated: listing.truncated });
+  } catch { sendJson(res, 200, { ok: false, message: 'Repository files could not be listed.' }); }
+}
+
 // ── Static frontend serving ───────────────────────────────────────────────────
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const STATIC_DIR = join(__dirname, '..', '..', 'web', 'dist');
@@ -591,6 +607,10 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, performS
     }
     if (req.method === 'POST' && url === '/api/source') {
       await handleSource(req, res);
+      return;
+    }
+    if (req.method === 'POST' && url === '/api/repositories/files') {
+      await handleRepositoryFiles(req, res);
       return;
     }
 

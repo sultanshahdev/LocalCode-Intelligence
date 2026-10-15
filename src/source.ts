@@ -147,6 +147,15 @@ export async function discoverSourceFiles(
   return found;
 }
 
+/** A bounded, repository-relative list for navigation UI. It deliberately uses
+ * the same extension, ignored-directory, and no-symlink discovery policy as
+ * search preparation. */
+export async function listNavigableSourceFiles(repositoryPath: string, maximum = DEFAULT_SOURCE_LIMITS.maxFiles): Promise<{ files: string[]; truncated: boolean }> {
+  const files = await discoverSourceFiles(repositoryPath, maximum + 1);
+  const truncated = files.length > maximum;
+  return { files: files.slice(0, maximum).map(file => relative(repositoryPath, file)), truncated };
+}
+
 export function segmentSource(
   filePath: string,
   content: string,
