@@ -50,7 +50,20 @@ export function assessRelevance(query: string, candidates: readonly SearchCandid
   }
 
   const evidence = new Set(candidates.flatMap(candidate => words(`${candidate.filePath} ${candidate.text}`).map(stem)));
-  if (terms.some(term => evidence.has(term))) return { relevant: true, reason: 'lexical-evidence' };
+  const meaningful = [...new Set(terms.filter(term => term.length > 2))];
+  const matched = meaningful.filter(term => evidence.has(term));
+  const navigationIntent = /\\b(?:where|find|locate|show|which|how)\\b/i.test(query);
+
+  // A single accidental word from a multi-concept query (e.g. "quantum
+  // entanglement teleportation algorithm") is not positive relevance evidence.
+  if (meaningful.length === 1 && matched.length === 1) return { relevant: true, reason: 'lexical-evidence' };
+  if (meaningful.length >= 2 && matched.length >= 2 && matched.length / meaningful.length >= 0.5) {
+    return { relevant: true, reason: 'lexical-evidence' };
+  }
+  if (navigationIntent && matched.length > 0 && candidates.some(candidate =>
+    candidate.evidenceClass === 'partial-token' || candidate.evidenceClass === 'exact-identifier' ||
+    candidate.evidenceClass === 'exact-path' || candidate.evidenceClass === 'strong-lexical'
+  )) return { relevant: true, reason: 'lexical-evidence' };
 
   const codeConcept = terms.some(term => PROGRAMMING.has(term) || PROGRAMMING.has(SYNONYMS[term] ?? term) || PROGRAMMING.has(stem(term)));
   const top = candidates[0]?.score ?? 0;
