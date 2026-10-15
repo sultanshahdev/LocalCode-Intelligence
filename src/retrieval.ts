@@ -220,8 +220,17 @@ export async function retrieveHybridCandidates(
     add(candidate, index + 1, 'lexical', candidate.evidenceClass);
   });
 
+  const explicitSymbol = isSymbolQuery(query.trim());
+  const symbolPriority = (item: typeof fused extends Map<string, infer V> ? V : never): number => {
+    if (!explicitSymbol) return 0;
+    const symbol = query.trim();
+    if (item.evidenceClass === 'exact-identifier' && isSymbolDefinition(item.candidate.text, symbol)) return 3;
+    if (item.evidenceClass === 'exact-identifier') return 2;
+    if (item.evidenceClass === 'exact-path') return 1;
+    return 0;
+  };
   return [...fused.values()]
-    .sort((a, b) => b.score - a.score || b.candidate.score - a.candidate.score)
+    .sort((a, b) => symbolPriority(b) - symbolPriority(a) || b.score - a.score || b.candidate.score - a.candidate.score)
     .slice(0, limit)
     .map(item => withRetrievalEvidence(
       item.candidate,
@@ -285,7 +294,6 @@ export function retrieveLexicalCandidates(query: string, regions: readonly Sourc
 
   return regions
     .map(region => {
-      const regionText = `${region.filePath} ${region.text}`;
       const classification = classifyEvidence(query, queryRawTokens, queryNonStopRaw, queryNonStopSub, region);
       return {
         ...region,
@@ -307,67 +315,80 @@ export function identifierTokens(text: string): string[] {
   return (text.match(/[A-Z]?[a-z]+|[A-Z]+(?![a-z])|\d+/g) ?? []).map(token => token.toLowerCase());
 }
 
+function isSymbolQuery(query: string): boolean {
+  return /^[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*$/.test(query.trim());
+}
+
+function matchesWholeSymbol(text: string, symbol: string): boolean {
+  const escapedParts = symbol.split('.').map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const expression = escapedParts.join('\\s*\\.\\s*');
+  return new RegExp(`(^|[^A-Za-z0-9_$])${expression}(?![A-Za-z0-9_$])`).test(text);
+}
+
+/**
+ * A declaration/assignment is stronger navigation evidence than a call in a
+ * test or example. This is a ranking hint for explicit symbol queries only.
+ */
+function isSymbolDefinition(text: string, symbol: string): boolean {
+  const escapedParts = symbol.split('.').map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const expression = escapedParts.join('\\s*\\.\\s*');
+  const assigned = new RegExp(`(^|[^A-Za-z0-9_$])${expression}\\s*=(?!=)`);
+  const bareName = symbol.split('.').at(-1)!;
+  const declaration = new RegExp(`\\b(?:function|class|interface|type|const|let|var)\\s+${bareName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
+  return assigned.test(text) || (symbol === bareName && declaration.test(text));
+}
+
 function classifyEvidence(
   query: string,
-  rawTokens: string[],
+  _rawTokens: string[],
   nonStopRaw: string[],
   nonStopSub: string[],
   region: SourceRegion,
 ): { score: number; evidenceClass: EvidenceClass } {
   const filePath = region.filePath;
-  const fileName = filePath.split('/').pop() ?? filePath;
   const regionText = region.text;
+  const trimmed = query.trim();
 
-  // 1. Exact full-identifier match (e.g. "verifyToken", "compileETag", "CancelToken")
-  const exactIdentMatch = nonStopRaw.some(token => {
-    if (token.length < 3) return false;
-    const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const regex = new RegExp(`\\b${escaped}\\b`);
-    return regex.test(regionText);
-  });
-  if (exactIdentMatch) {
-    return { score: 1.0, evidenceClass: 'exact-identifier' };
+  // Match the FULL requested symbol, especially dotted members such as
+  // app.listen. Matching just "app" is not an exact app.listen match.
+  if (isSymbolQuery(trimmed) && matchesWholeSymbol(regionText, trimmed)) {
+    return { score: isSymbolDefinition(regionText, trimmed) ? 1.2 : 1, evidenceClass: 'exact-identifier' };
   }
 
-  // 2. Exact filename/path match
-  const exactPathMatch = nonStopRaw.some(token => {
-    if (token.length < 3) return false;
-    const lower = token.toLowerCase();
-    return filePath.toLowerCase().includes(lower) || fileName.toLowerCase().includes(lower);
-  });
-  if (exactPathMatch) {
-    return { score: 0.9, evidenceClass: 'exact-path' };
+  // Identifier-shaped tokens mentioned in a longer question can also be
+  // useful; avoid promoting ordinary language words to exact symbols.
+  const technicalName = nonStopRaw.find(token =>
+    token.length >= 4 && /[A-Z_$]/.test(token) && matchesWholeSymbol(regionText, token)
+  );
+  if (technicalName) {
+    return { score: 0.9, evidenceClass: 'strong-lexical' };
   }
 
-  // 3. Multi-token match across region
-  const regionSubTokens = new Set(identifierTokens(`${filePath} ${regionText}`));
-  const matchingSubTokens = nonStopSub.filter(term => regionSubTokens.has(term));
+  // For a simple filename query, match complete path components rather than
+  // arbitrary substrings within path names.
+  if (isSymbolQuery(trimmed)) {
+    const lower = trimmed.toLowerCase();
+    const components = filePath.toLowerCase().split(/[/.]/);
+    if (components.includes(lower) || filePath.toLowerCase().endsWith('/' + lower)) {
+      return { score: 0.9, evidenceClass: 'exact-path' };
+    }
+  }
 
-  if (nonStopSub.length >= 2 && matchingSubTokens.length === nonStopSub.length) {
+  const regionTokens = new Set(identifierTokens(`${filePath} ${regionText}`));
+  const meaningfulTerms = [...new Set(nonStopSub)];
+  const matched = meaningfulTerms.filter(term => regionTokens.has(term));
+
+  if (meaningfulTerms.length >= 2 && matched.length === meaningfulTerms.length) {
     return { score: 0.8, evidenceClass: 'strong-lexical' };
   }
-
-  if (matchingSubTokens.length >= 2) {
-    const fraction = matchingSubTokens.length / (nonStopSub.length || 1);
-    return { score: 0.5 * fraction, evidenceClass: 'strong-lexical' };
+  if (matched.length >= 2 && matched.length / meaningfulTerms.length >= 0.5) {
+    return { score: 0.5 * (matched.length / meaningfulTerms.length), evidenceClass: 'strong-lexical' };
+  }
+  if (matched.length > 0) {
+    return { score: 0.2 * (matched.length / meaningfulTerms.length), evidenceClass: 'partial-token' };
   }
 
-  // 4. Partial identifier match (single non-stop token matched)
-  if (matchingSubTokens.length === 1 && nonStopSub.length === 1) {
-    return { score: 0.4, evidenceClass: 'partial-token' };
-  }
-
-  if (matchingSubTokens.length === 1) {
-    return { score: 0.2, evidenceClass: 'partial-token' };
-  }
-
-  // 5. Weak generic token overlap (only stop words matched)
-  const allSubTokens = identifierTokens(query);
-  const allMatches = allSubTokens.filter(t => regionSubTokens.has(t));
-  if (allMatches.length > 0) {
-    return { score: 0.05 * (allMatches.length / allSubTokens.length), evidenceClass: 'weak-overlap' };
-  }
-
+  // Stopwords alone are never lexical evidence.
   return { score: 0, evidenceClass: 'semantic-only' };
 }
 
