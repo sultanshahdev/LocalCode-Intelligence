@@ -210,6 +210,41 @@ test('search distinguishes no supported candidate from operational failure', asy
   assert.match(failureOutput.stderr(), /Search processing failed/);
 });
 
+test('diagnose output reproduces production search parity and serializes candidate metadata', async () => {
+  const directory = await createFixture();
+  const file = join(directory, 'auth.ts');
+  await writeFile(file, 'export function verifyToken(token: string): boolean { return token.length > 0; }\n');
+
+  const diagOutput = captureStreams();
+  const diagExit = await invokeCli(['diagnose', 'verifyToken', '--repo', directory], diagOutput.streams);
+  assert.equal(diagExit, 0);
+
+  const diagJson = JSON.parse(diagOutput.stdout());
+  assert.ok(Array.isArray(diagJson.productionFinalTop5));
+  assert.ok(Array.isArray(diagJson.semanticTop20));
+  assert.ok(Array.isArray(diagJson.lexicalTop20));
+  assert.ok(Array.isArray(diagJson.fusedTop20));
+  assert.ok(diagJson.sourceCoverage);
+  assert.equal(diagJson.sourceCoverage.filesProcessed, 1);
+  assert.equal(diagJson.productionFinalTop5.length, 1);
+  assert.equal(diagJson.productionFinalTop5[0].filePath, 'auth.ts');
+  assert.equal(diagJson.productionFinalTop5[0].finalVisibility, true);
+  assert.equal(diagJson.productionFinalTop5[0].evidenceClass, 'exact-identifier');
+  assert.equal(diagJson.productionOutcome, 'candidates');
+
+  // Verify non-relevant query parity
+  const bananaOutput = captureStreams();
+  const bananaExit = await invokeCli(['diagnose', 'find banana', '--repo', directory], bananaOutput.streams);
+  assert.equal(bananaExit, 0);
+
+  const bananaJson = JSON.parse(bananaOutput.stdout());
+  assert.equal(bananaJson.productionOutcome, 'no-relevant-results');
+  assert.equal(bananaJson.productionFinalTop5.length, 0);
+  assert.ok(bananaJson.discardedCandidates.length > 0);
+  assert.equal(bananaJson.discardedCandidates[0].finalVisibility, false);
+  assert.equal(bananaJson.discardedCandidates[0].discardReason, 'relevance-assessment-insufficient-evidence');
+});
+
 function captureStreams() {
   let stdout = '';
   let stderr = '';

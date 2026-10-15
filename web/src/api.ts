@@ -20,6 +20,10 @@ export interface RepoStatusResponse {
   status?: RepoStatus;
   message?: string;
 }
+export interface PreparedRepositoryResponse extends RepoStatusResponse {
+  repositoryId?: string;
+  source?: { type: 'local' | 'github'; label: string; githubUrl?: string; revision?: string };
+}
 
 export interface SearchCandidate {
   filePath: string;
@@ -37,7 +41,7 @@ export interface SearchScopeInfo {
 
 export interface SearchResponse {
   ok: boolean;
-  outcome?: 'candidates' | 'no-supported-candidate';
+  outcome?: 'candidates' | 'no-supported-candidate' | 'no-relevant-results';
   candidates?: SearchCandidate[];
   withheldCandidates?: number;
   scope?: SearchScopeInfo;
@@ -82,9 +86,12 @@ export async function apiHealth(): Promise<HealthResponse> {
 export async function apiRepoStatus(repositoryPath: string): Promise<RepoStatusResponse> {
   return post<RepoStatusResponse>('/repo/status', { repositoryPath });
 }
+export async function apiPrepareRepository(type: 'local' | 'github', value: string, refresh = false): Promise<PreparedRepositoryResponse> {
+  return post<PreparedRepositoryResponse>('/repositories/prepare', { source: { type, value }, refresh });
+}
 
-export async function apiSearch(query: string, repositoryPath: string): Promise<SearchResponse> {
-  return post<SearchResponse>('/search', { query, repositoryPath });
+export async function apiSearch(query: string, repositoryPath: string, repositoryId?: string): Promise<SearchResponse> {
+  return post<SearchResponse>('/search', repositoryId ? { query, repositoryId } : { query, repositoryPath });
 }
 
 export async function apiSource(
@@ -92,7 +99,7 @@ export async function apiSource(
   filePath: string,
   startLine: number,
   endLine: number,
-  context = 25,
+  context = 25, repositoryId?: string,
 ): Promise<SourceResponse> {
-  return post<SourceResponse>('/source', { repositoryPath, filePath, startLine, endLine, context });
+  return post<SourceResponse>('/source', repositoryId ? { repositoryId, filePath, startLine, endLine, context } : { repositoryPath, filePath, startLine, endLine, context });
 }

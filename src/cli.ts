@@ -5,6 +5,17 @@ import { pathToFileURL } from 'node:url';
 import { validateRepositoryDirectory } from './repository.js';
 import { searchRepository, type SearchResult } from './search.js';
 import { inspectRepositorySearchStatus, type RepositoryStatusResult } from './status.js';
+import { prepareSourceScope } from './source.js';
+import {
+  createLocalEmbedder,
+  retrieveCandidates,
+  retrieveHybridCandidates,
+  retrieveLexicalCandidates,
+  selectDisplayCandidates,
+  serializeCandidateDetails,
+  type SearchCandidate,
+} from './retrieval.js';
+import { assessRelevance } from './relevance.js';
 
 const REPO_USAGE = 'Usage: localcode repo check <path>';
 const STATUS_USAGE = 'Usage: localcode repo status <path>';
@@ -29,6 +40,7 @@ export async function runCli(
   streams: CliStreams = { stdout: process.stdout, stderr: process.stderr },
   dependencies: CliDependencies = { search: searchRepository, status: inspectRepositorySearchStatus },
 ): Promise<number> {
+  if (args[0] === 'diagnose') return runDiagnostic(args.slice(1), streams);
   if (args[0] === 'search') return runSearch(args.slice(1), streams, dependencies);
 
   const [group, command, repositoryPath, ...extraArguments] = args;
@@ -59,6 +71,90 @@ export async function runCli(
 
   streams.stdout.write(`Validated repository scope: ${validation.resolvedPath}\n`);
   streams.stdout.write('Status: directory is readable; indexing has not been performed.\n');
+  return 0;
+}
+
+async function runDiagnostic(args: readonly string[], streams: CliStreams): Promise<number> {
+  if (process.env['NODE_ENV'] === 'production') {
+    streams.stderr.write('Diagnostics are disabled in production.\n');
+    return 2;
+  }
+  const [query, repoFlag, repositoryPath] = args;
+  if (!query || repoFlag !== '--repo' || !repositoryPath) {
+    streams.stderr.write('Usage: localcode diagnose "query" --repo <path>\n');
+    return 2;
+  }
+
+  const validation = await validateRepositoryDirectory(repositoryPath);
+  if (!validation.ok) {
+    streams.stderr.write(`${validation.message}\n`);
+    return 1;
+  }
+
+  const scope = await prepareSourceScope(validation.resolvedPath);
+  const embedder = await createLocalEmbedder();
+
+  // Top 20 semantic and lexical pools
+  const semantic = await retrieveCandidates(query, scope.regions, embedder, 20);
+  const lexical = retrieveLexicalCandidates(query, scope.regions, 20);
+
+  // Top 20 fused
+  const fused20 = await retrieveHybridCandidates(query, scope.regions, embedder, 20);
+
+  // Production search parity: Top 5 hybrid retrieval, display selection, relevance decision
+  const productionHybridTop5 = await retrieveHybridCandidates(query, scope.regions, embedder, 5);
+  const displaySelection = selectDisplayCandidates(productionHybridTop5);
+  const relevanceDecision = assessRelevance(query, displaySelection.candidates);
+
+  const productionFinalTop5 = relevanceDecision.relevant ? displaySelection.candidates : [];
+
+  // Track discarded candidates from production selection
+  const discardedCandidates = productionHybridTop5
+    .filter(c => !productionFinalTop5.some(final =>
+      final.filePath === c.filePath && final.startLine === c.startLine && final.endLine === c.endLine
+    ))
+    .map(c => {
+      let discardReason: string;
+      if (!relevanceDecision.relevant) {
+        discardReason = 'relevance-assessment-insufficient-evidence';
+      } else if (c.score <= 0 && !c.lexicalEvidence) {
+        discardReason = 'non-positive-cosine-without-lexical-evidence';
+      } else {
+        discardReason = 'filtered-from-display';
+      }
+      return {
+        ...serializeCandidateDetails(c),
+        finalVisibility: false,
+        discardReason,
+      };
+    });
+
+  const diagnosticResult = {
+    query,
+    repository: validation.resolvedPath,
+    sourceCoverage: {
+      filesProcessed: scope.filesProcessed,
+      filesDiscovered: scope.filesDiscovered ?? scope.filesProcessed,
+      warnings: scope.warnings,
+      regions: scope.regions.length,
+    },
+    semanticTop20: semantic.map(serializeCandidateDetails),
+    lexicalTop20: lexical.map(serializeCandidateDetails),
+    fusedTop20: fused20.map(serializeCandidateDetails),
+    productionFinalTop5: productionFinalTop5.map(c => ({
+      ...serializeCandidateDetails(c),
+      finalVisibility: true,
+    })),
+    discardedCandidates,
+    relevanceDecision,
+    productionOutcome: displaySelection.candidates.length === 0
+      ? 'no-supported-candidate'
+      : relevanceDecision.relevant
+        ? 'candidates'
+        : 'no-relevant-results',
+  };
+
+  streams.stdout.write(JSON.stringify(diagnosticResult, null, 2) + '\n');
   return 0;
 }
 

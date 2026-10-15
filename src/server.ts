@@ -9,6 +9,7 @@ import { lstat, realpath, open } from 'node:fs/promises';
 import { constants, existsSync, createReadStream } from 'node:fs';
 import { resolve, relative, join, sep, extname, isAbsolute, win32 } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { randomUUID } from 'node:crypto';
 
 import { validateRepositoryDirectory } from './repository.js';
 import { inspectRepositorySearchStatus } from './status.js';
@@ -16,6 +17,7 @@ import { searchRepository } from './search.js';
 import { CachingEmbedder, createLocalEmbedder, type Embedder } from './retrieval.js';
 import { prepareSourceScope, DEFAULT_SOURCE_LIMITS } from './source.js';
 import { SearchExecutionController, SearchOverloadedError, SearchQueueAbortedError } from './search-execution.js';
+import { GitHubRepositoryAcquirer, GitHubRepositoryError } from './github-repository.js';
 
 const HOST = '127.0.0.1';
 const PORT = Number(process.env['PORT'] ?? 4317);
@@ -26,6 +28,19 @@ const JSON_CONTENT_TYPE = 'application/json';
 let cachedEmbedder: Embedder | null = null;
 let embedderInitialization: Promise<Embedder> | null = null;
 const searchController = new SearchExecutionController(1, 2);
+const githubAcquirer = new GitHubRepositoryAcquirer();
+const preparedRepositories = new Map<string, { path: string; type: 'local' | 'github'; label: string; githubUrl: string | undefined; revision: string | undefined }>();
+const MAX_PREPARED_REPOSITORIES = 24;
+function registerPreparedRepository(id: string, entry: { path: string; type: 'local' | 'github'; label: string; githubUrl: string | undefined; revision: string | undefined }): void {
+  preparedRepositories.set(id, entry);
+  if (entry.type === 'github') githubAcquirer.retain(entry.path);
+  while (preparedRepositories.size > MAX_PREPARED_REPOSITORIES) {
+    const oldest = preparedRepositories.entries().next().value as [string, typeof entry] | undefined;
+    if (oldest === undefined) break;
+    preparedRepositories.delete(oldest[0]);
+    if (oldest[1].type === 'github') void githubAcquirer.release(oldest[1].path);
+  }
+}
 async function getEmbedder(): Promise<Embedder> {
   if (cachedEmbedder !== null) return cachedEmbedder;
   if (embedderInitialization === null) {
@@ -306,6 +321,40 @@ async function handleRepoStatus(req: IncomingMessage, res: ServerResponse): Prom
   sendJson(res, 200, { ok: true, resolvedPath: validation.resolvedPath, status: result.status });
 }
 
+async function handlePrepareRepository(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (!requiresJson(req, res)) return;
+  let body: unknown;
+  try { body = await readJsonBody(req); } catch (error) { sendBodyError(res, error); return; }
+  const source = typeof body === 'object' && body !== null ? (body as { source?: { type?: unknown; value?: unknown }; refresh?: unknown }).source : undefined;
+  if (source === undefined || typeof source !== 'object' || source === null || (source.type !== 'local' && source.type !== 'github') || typeof source.value !== 'string' || !source.value.trim()) {
+    sendError(res, 400, 'source.type and source.value are required.'); return;
+  }
+  try {
+    let path: string; let label: string; let githubUrl: string | undefined; let revision: string | undefined;
+    if (source.type === 'local') {
+      const validation = await validateRepositoryDirectory(source.value.trim());
+      if (!validation.ok) { sendJson(res, 200, { ok: false, message: validation.message }); return; }
+      path = validation.resolvedPath; label = path;
+    } else {
+      const acquired = await githubAcquirer.acquire(source.value, body !== null && typeof body === 'object' && (body as { refresh?: unknown }).refresh === true);
+      path = acquired.path; label = `${acquired.repository.owner}/${acquired.repository.repository}`; githubUrl = acquired.repository.canonicalUrl; revision = acquired.revision;
+    }
+    const status = await inspectRepositorySearchStatus(path);
+    if (!status.ok) { sendJson(res, 200, { ok: false, message: status.message }); return; }
+    const repositoryId = randomUUID();
+    registerPreparedRepository(repositoryId, { path, type: source.type, label, githubUrl, revision });
+    sendJson(res, 200, { ok: true, repositoryId, source: { type: source.type, label, githubUrl, revision }, status: status.status });
+  } catch (error: unknown) {
+    const message = error instanceof GitHubRepositoryError ? error.message : 'Repository preparation failed.';
+    sendJson(res, 200, { ok: false, message, code: error instanceof GitHubRepositoryError ? error.code : 'preparation-failed' });
+  }
+}
+
+function resolvePrepared(body: { repositoryId?: unknown; repositoryPath?: unknown }): string | null {
+  if (typeof body.repositoryId === 'string') return preparedRepositories.get(body.repositoryId)?.path ?? null;
+  return typeof body.repositoryPath === 'string' ? body.repositoryPath : null;
+}
+
 async function handleSearch(req: IncomingMessage, res: ServerResponse, performSearch: typeof searchRepository = searchRepository): Promise<void> {
   if (!requiresJson(req, res)) return;
   let body: unknown;
@@ -321,13 +370,14 @@ async function handleSearch(req: IncomingMessage, res: ServerResponse, performSe
     return;
   }
 
-  const { query, repositoryPath } = body as { query?: unknown; repositoryPath?: unknown };
+  const { query } = body as { query?: unknown; repositoryPath?: unknown; repositoryId?: unknown };
+  const repositoryPath = resolvePrepared(body as { repositoryId?: unknown; repositoryPath?: unknown });
   if (typeof query !== 'string' || query.trim().length === 0) {
     sendError(res, 400, 'query must be a non-empty string');
     return;
   }
   if (typeof repositoryPath !== 'string' || repositoryPath.trim().length === 0) {
-    sendError(res, 400, 'repositoryPath must be a non-empty string');
+    sendError(res, 400, 'A prepared repository reference is required.');
     return;
   }
 
@@ -398,7 +448,7 @@ async function handleSource(req: IncomingMessage, res: ServerResponse): Promise<
     return;
   }
 
-  const { repositoryPath, filePath, startLine, endLine, context } = body as {
+  const { filePath, startLine, endLine, context } = body as {
     repositoryPath?: unknown;
     filePath?: unknown;
     startLine?: unknown;
@@ -406,8 +456,9 @@ async function handleSource(req: IncomingMessage, res: ServerResponse): Promise<
     context?: unknown;
   };
 
+  const repositoryPath = resolvePrepared(body as { repositoryId?: unknown; repositoryPath?: unknown });
   if (typeof repositoryPath !== 'string' || repositoryPath.trim().length === 0) {
-    sendError(res, 400, 'repositoryPath must be a non-empty string');
+    sendError(res, 400, 'A prepared repository reference is required.');
     return;
   }
   if (typeof filePath !== 'string' || filePath.trim().length === 0) {
@@ -528,6 +579,10 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, performS
     }
     if (req.method === 'POST' && url === '/api/repo/status') {
       await handleRepoStatus(req, res);
+      return;
+    }
+    if (req.method === 'POST' && url === '/api/repositories/prepare') {
+      await handlePrepareRepository(req, res);
       return;
     }
     if (req.method === 'POST' && url === '/api/search') {

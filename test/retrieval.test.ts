@@ -3,6 +3,8 @@ import test from 'node:test';
 
 import {
   CachingEmbedder,
+  retrieveHybridCandidates,
+  retrieveLexicalCandidates,
   cosineSimilarity,
   retrieveCandidates,
   selectDisplayCandidates,
@@ -17,6 +19,38 @@ test('orders source candidates using supplied semantic vectors', async () => {
   ], embedder);
   assert.equal(candidates[0]?.filePath, 'src/session.ts');
   assert.equal(candidates[0]?.startLine, 7);
+});
+
+test('lexical and hybrid retrieval retain exact camelCase identifiers when semantic ranking misses', async () => {
+  const regions = [
+    { filePath: 'src/noise.ts', startLine: 1, endLine: 1, text: 'export const unrelated = true;' },
+    { filePath: 'src/auth.ts', startLine: 3, endLine: 3, text: 'export function verifyToken() {}' },
+  ];
+  assert.equal(retrieveLexicalCandidates('verify token', regions)[0]?.filePath, 'src/auth.ts');
+  const result = await retrieveHybridCandidates('verifyToken', regions, { embed: async () => [[1, 0], [1, 0], [0, 1]] });
+  assert.equal(result[0]?.filePath, 'src/auth.ts');
+});
+
+test('qualified symbol queries prefer implementations over example calls', async () => {
+  const regions = [
+    { filePath: 'test/app.listen.js', startLine: 1, endLine: 2, text: 'const app = createApp(); app.listen(3000);' },
+    { filePath: 'examples/demo.js', startLine: 1, endLine: 2, text: 'app.listen(5000);' },
+    { filePath: 'lib/application.js', startLine: 15, endLine: 20, text: 'app.listen = function listen() { return server.listen(); };' },
+  ];
+  const lexical = retrieveLexicalCandidates('app.listen', regions);
+  assert.equal(lexical[0]?.filePath, 'lib/application.js');
+  assert.equal(lexical[0]?.evidenceClass, 'exact-identifier');
+
+  const hybrid = await retrieveHybridCandidates('app.listen', regions, {
+    embed: async () => [[1, 0], [1, 0], [1, 0], [-1, 0]],
+  });
+  assert.equal(hybrid[0]?.filePath, 'lib/application.js');
+  assert.equal(hybrid[0]?.score, -1);
+
+  const incidental = retrieveLexicalCandidates('app.listen', [
+    { filePath: 'other.ts', startLine: 1, endLine: 1, text: 'const app = {}; const listen = true;' },
+  ]);
+  assert.notEqual(incidental[0]?.evidenceClass, 'exact-identifier');
 });
 
 test('rejects malformed vectors instead of fabricating a score', () => {

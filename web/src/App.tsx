@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   apiRepoStatus,
+  apiPrepareRepository,
   apiSearch,
   apiSource,
   type SearchCandidate,
@@ -50,11 +51,12 @@ function CopyButton({ text, label = 'Copy' }: { text: string; label?: string }) 
 
 interface SourceViewerProps {
   repositoryPath: string;
+  repositoryId?: string;
   candidate: SearchCandidate;
   onClose: () => void;
 }
 
-function SourceViewer({ repositoryPath, candidate, onClose }: SourceViewerProps) {
+function SourceViewer({ repositoryPath, repositoryId, candidate, onClose }: SourceViewerProps) {
   const [sourceData, setSourceData] = useState<SourceResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -65,17 +67,20 @@ function SourceViewer({ repositoryPath, candidate, onClose }: SourceViewerProps)
   useEscapeKey(onClose);
 
   useEffect(() => {
+    let cancelled = false;
     setLoading(true);
     setError(null);
     setSourceData(null);
-    apiSource(repositoryPath, candidate.filePath, candidate.startLine, candidate.endLine, 25)
+    apiSource(repositoryPath, candidate.filePath, candidate.startLine, candidate.endLine, 25, repositoryId)
       .then((result) => {
+        if (cancelled) return;
         setSourceData(result);
         if (!result.ok) setError(result.message ?? 'Source read failed');
       })
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Unknown error'))
-      .finally(() => setLoading(false));
-  }, [repositoryPath, candidate.filePath, candidate.startLine, candidate.endLine]);
+      .catch((e: unknown) => { if (!cancelled) setError(e instanceof Error ? e.message : 'Unknown error'); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [repositoryPath, repositoryId, candidate.filePath, candidate.startLine, candidate.endLine]);
 
   // Scroll highlighted region into view once loaded
   useEffect(() => {
@@ -155,9 +160,11 @@ interface ResultCardProps {
   candidate: SearchCandidate;
   index: number;
   onViewSource: (c: SearchCandidate) => void;
+  githubUrl?: string;
+  revision?: string;
 }
 
-function ResultCard({ candidate, index, onViewSource }: ResultCardProps) {
+function ResultCard({ candidate, index, onViewSource, githubUrl, revision }: ResultCardProps) {
   const location = `${candidate.filePath}:${candidate.startLine}-${candidate.endLine}`;
   const score = candidate.score;
   const scorePct = Math.round(score * 100);
@@ -195,6 +202,7 @@ function ResultCard({ candidate, index, onViewSource }: ResultCardProps) {
           >
             View Source
           </button>
+          {githubUrl && revision && <a className="btn-view" target="_blank" rel="noreferrer" href={`${githubUrl}/blob/${revision}/${candidate.filePath.split('/').map(encodeURIComponent).join('/')}#L${candidate.startLine}-L${candidate.endLine}`}>Open on GitHub</a>}
         </div>
       </div>
 
@@ -286,6 +294,11 @@ function SearchMeta({ result }: { result: SearchResponse }) {
 
 export default function App() {
   const [repoPath, setRepoPath] = useState('');
+  const [sourceType, setSourceType] = useState<'local' | 'github'>('local');
+  const [repositoryId, setRepositoryId] = useState<string | undefined>();
+  const [githubSource, setGithubSource] = useState<{ url: string; revision: string } | null>(null);
+  const repositoryGeneration = useRef(0);
+  const searchGeneration = useRef(0);
   const [repoStatus, setRepoStatus] = useState<RepoStatus | null>(null);
   const [repoError, setRepoError] = useState<string | null>(null);
   const [repoLoading, setRepoLoading] = useState(false);
@@ -300,20 +313,36 @@ export default function App() {
 
   const queryInputRef = useRef<HTMLInputElement>(null);
 
-  const handleCheckRepo = useCallback(async () => {
+  const handleCheckRepo = useCallback(async (refresh = false) => {
     const path = repoPath.trim();
     if (!path) return;
+    const current = ++repositoryGeneration.current;
     setRepoLoading(true);
     setRepoError(null);
-    setRepoStatus(null);
-    setResolvedPath('');
-    setSearchResult(null);
-    setActiveSource(null);
+    if (!refresh) {
+      searchGeneration.current += 1;
+      setSearchLoading(false);
+      setRepoStatus(null);
+      setResolvedPath('');
+      setSearchResult(null);
+      setActiveSource(null);
+    }
     try {
-      const result = await apiRepoStatus(path);
+      const result = await apiPrepareRepository(sourceType, path, refresh);
+      if (current !== repositoryGeneration.current) return;
       if (result.ok && result.status) {
+        // Only a completed, successful refresh invalidates the old revision's
+        // search results; a failed refresh leaves the prior session usable.
+        if (refresh) {
+          searchGeneration.current += 1;
+          setSearchLoading(false);
+          setSearchResult(null);
+          setActiveSource(null);
+        }
         setRepoStatus(result.status);
-        setResolvedPath(result.resolvedPath ?? path);
+        setResolvedPath(result.source?.label ?? result.resolvedPath ?? path);
+        setRepositoryId(result.repositoryId);
+        setGithubSource(result.source?.githubUrl && result.source.revision ? { url: result.source.githubUrl, revision: result.source.revision } : null);
         // Focus search input if eligible
         if (result.status.eligible) {
           setTimeout(() => queryInputRef.current?.focus(), 100);
@@ -322,29 +351,34 @@ export default function App() {
         setRepoError(result.message ?? 'Repository check failed');
       }
     } catch (e) {
-      setRepoError(e instanceof Error ? e.message : 'Network error — is the server running?');
+      if (current === repositoryGeneration.current) setRepoError(e instanceof Error ? e.message : 'Network error — is the server running?');
     } finally {
-      setRepoLoading(false);
+      if (current === repositoryGeneration.current) setRepoLoading(false);
     }
-  }, [repoPath]);
+  }, [repoPath, sourceType]);
+
+  const invalidateRepository = () => { repositoryGeneration.current += 1; searchGeneration.current += 1; setRepoLoading(false); setSearchLoading(false); setRepositoryId(undefined); setRepoStatus(null); setResolvedPath(''); setGithubSource(null); setSearchResult(null); setSearchError(null); setRepoError(null); setActiveSource(null); };
+  const changeSource = (type: 'local' | 'github') => { invalidateRepository(); setSourceType(type); };
 
   const handleSearch = useCallback(async () => {
     const q = query.trim();
     if (!q || !resolvedPath) return;
+    const current = ++searchGeneration.current;
     setSearchLoading(true);
     setSearchError(null);
     setSearchResult(null);
     setActiveSource(null);
     try {
-      const result = await apiSearch(q, resolvedPath);
+      const result = await apiSearch(q, resolvedPath, repositoryId);
+      if (current !== searchGeneration.current) return;
       setSearchResult(result);
       if (!result.ok) setSearchError(result.message ?? 'Search failed');
     } catch (e) {
-      setSearchError(e instanceof Error ? e.message : 'Network error — is the server running?');
+      if (current === searchGeneration.current) setSearchError(e instanceof Error ? e.message : 'Network error — is the server running?');
     } finally {
-      setSearchLoading(false);
+      if (current === searchGeneration.current) setSearchLoading(false);
     }
-  }, [query, resolvedPath]);
+  }, [query, resolvedPath, repositoryId]);
 
   const canSearch = !!repoStatus?.eligible && !!resolvedPath;
   const hasResults = !!(searchResult?.ok && (searchResult.candidates?.length ?? 0) > 0);
@@ -370,16 +404,20 @@ export default function App() {
             <StepBadge n={1} done={!!repoStatus} />
             <span>Repository</span>
           </div>
+          <div className="source-switch" role="group" aria-label="Repository source">
+            <button className={sourceType === 'local' ? 'source-switch__active' : ''} onClick={() => changeSource('local')}>Local folder</button>
+            <button className={sourceType === 'github' ? 'source-switch__active' : ''} onClick={() => changeSource('github')}>GitHub URL</button>
+          </div>
 
           <div className="field-row">
             <input
               className="field-input"
               type="text"
-              placeholder="Absolute path to local repository, e.g. /home/user/my-project"
+              placeholder={sourceType === 'local' ? 'Absolute path, e.g. /home/user/my-project' : 'https://github.com/owner/repository'}
               value={repoPath}
-              onChange={(e) => setRepoPath(e.target.value)}
+              onChange={(e) => { invalidateRepository(); setRepoPath(e.target.value); }}
               onKeyDown={(e) => { if (e.key === 'Enter') void handleCheckRepo(); }}
-              aria-label="Repository path"
+              aria-label={sourceType === 'local' ? 'Repository path' : 'Public GitHub repository URL'}
               spellCheck={false}
               autoComplete="off"
             />
@@ -388,8 +426,11 @@ export default function App() {
               onClick={() => void handleCheckRepo()}
               disabled={repoLoading || !repoPath.trim()}
             >
-              {repoLoading ? <><Spinner />Checking…</> : 'Check Repository'}
+              {repoLoading ? <><Spinner />Preparing…</> : sourceType === 'github' ? 'Prepare repository' : 'Check Repository'}
             </button>
+            {sourceType === 'github' && repoStatus && (
+              <button className="btn" onClick={() => void handleCheckRepo(true)} disabled={repoLoading}>Refresh</button>
+            )}
           </div>
 
           {repoError && (
@@ -422,7 +463,16 @@ export default function App() {
                   : 'Select a valid repository above to enable search'
               }
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              onChange={(e) => {
+                // A response to the previous query must never be rendered as
+                // evidence for the text currently visible in the search field.
+                searchGeneration.current += 1;
+                setSearchLoading(false);
+                setSearchResult(null);
+                setSearchError(null);
+                setActiveSource(null);
+                setQuery(e.target.value);
+              }}
               onKeyDown={(e) => { if (e.key === 'Enter') void handleSearch(); }}
               disabled={!canSearch}
               aria-label="Search query"
@@ -457,12 +507,11 @@ export default function App() {
 
           {searchResult?.ok && <SearchMeta result={searchResult} />}
 
-          {searchResult?.ok && searchResult.outcome === 'no-supported-candidate' && (
+          {searchResult?.ok && (searchResult.outcome === 'no-supported-candidate' || searchResult.outcome === 'no-relevant-results') && (
             <div className="empty-state">
-              <div className="empty-state-title">No candidates found</div>
+              <div className="empty-state-title">No relevant code found</div>
               <div className="empty-state-body">
-                The search completed but no retrieved region had positive cosine alignment with your query.
-                Try rephrasing or broadening your description. This does not confirm the behavior is absent from the repository.
+                We couldn’t identify a code region strongly related to your query. Rephrase it, describe a function or behavior, or try a programming-related keyword. This does not establish that the behavior is absent.
               </div>
             </div>
           )}
@@ -475,6 +524,8 @@ export default function App() {
                   candidate={candidate}
                   index={i}
                   onViewSource={setActiveSource}
+                  githubUrl={githubSource?.url}
+                  revision={githubSource?.revision}
                 />
               ))}
               <p className="results-disclaimer">
@@ -490,6 +541,7 @@ export default function App() {
       {activeSource && (
         <SourceViewer
           repositoryPath={resolvedPath}
+          repositoryId={repositoryId}
           candidate={activeSource}
           onClose={() => setActiveSource(null)}
         />

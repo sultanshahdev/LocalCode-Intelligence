@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main, feat/github-repositories-and-search-ux]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      ONNXRUNTIME_NODE_INSTALL_CUDA: skip
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install backend dependencies
+        run: npm ci
+      - name: Install frontend dependencies
+        run: npm ci --prefix web
+      - name: Build backend and frontend
+        run: npm run build
+      - name: Run deterministic tests
+        run: npm test
+
+  browser-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install frontend dependencies
+        run: npm ci --prefix web
+      - name: Install Playwright runner without changing lockfiles
+        run: npm install --no-save --package-lock=false playwright@1.56.1
+      - name: Install Chromium and required system libraries
+        run: npx playwright install --with-deps chromium
+      - name: Build browser application
+        run: npm run build:frontend
+      - name: Test UI with controlled API responses
+        run: node scripts/browser-smoke.mjs

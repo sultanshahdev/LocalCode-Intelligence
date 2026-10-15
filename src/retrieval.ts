@@ -102,8 +102,25 @@ function createDeferredVector(): DeferredVector {
   return { promise, resolve, reject };
 }
 
+export type EvidenceClass =
+  | 'exact-identifier'
+  | 'exact-path'
+  | 'strong-lexical'
+  | 'partial-token'
+  | 'weak-overlap'
+  | 'semantic-only';
+
 export interface SearchCandidate extends SourceRegion {
   score: number;
+  /** Exact identifier/path token evidence; independent of cosine similarity. */
+  lexicalEvidence?: boolean | undefined;
+  /** Reciprocal-rank fusion ordering signal, never a probability. */
+  fusionScore?: number | undefined;
+  /** Granular classification of lexical retrieval evidence. */
+  evidenceClass?: EvidenceClass | undefined;
+  /** Detailed match metadata for diagnostics and ranking. */
+  lexicalRank?: number | undefined;
+  semanticRank?: number | undefined;
 }
 
 export interface CandidateDisplaySelection {
@@ -118,7 +135,11 @@ export interface CandidateDisplaySelection {
 export function selectDisplayCandidates(
   candidates: readonly SearchCandidate[],
 ): CandidateDisplaySelection {
-  const displayed = candidates.filter(candidate => candidate.score > 0);
+  const displayed = candidates.filter(candidate =>
+    candidate.score > 0 ||
+    candidate.lexicalEvidence === true ||
+    (candidate.evidenceClass !== undefined && candidate.evidenceClass !== 'semantic-only')
+  );
   return { candidates: displayed, withheldCount: candidates.length - displayed.length };
 }
 
@@ -143,6 +164,232 @@ export async function retrieveCandidates(
     })
     .sort((left, right) => right.score - left.score)
     .slice(0, limit);
+}
+
+/** Lightweight hybrid retrieval: exact identifier/path evidence is fused with
+ * semantic ranks, so MiniLM cannot bury an obvious symbol match. */
+export async function retrieveHybridCandidates(
+  query: string, regions: readonly SourceRegion[], embedder: Embedder, limit = 5,
+): Promise<SearchCandidate[]> {
+  const allSemantic = await retrieveCandidates(query, regions, embedder, regions.length);
+  const semantic = allSemantic.slice(0, 50);
+  const rawByLocation = new Map(allSemantic.map(candidate => [`${candidate.filePath}:${candidate.startLine}:${candidate.endLine}`, candidate]));
+  
+  const lexicalAll = retrieveLexicalCandidates(query, regions, 50);
+  const lexical = lexicalAll.map(candidate => {
+    const raw = rawByLocation.get(`${candidate.filePath}:${candidate.startLine}:${candidate.endLine}`);
+    return {
+      ...(raw ?? candidate),
+      score: raw !== undefined ? raw.score : candidate.score,
+      evidenceClass: candidate.evidenceClass,
+      lexicalEvidence: candidate.lexicalEvidence,
+    };
+  });
+
+  const fused = new Map<string, {
+    candidate: SearchCandidate;
+    score: number;
+    lexical: boolean;
+    evidenceClass: EvidenceClass;
+    semanticRank?: number | undefined;
+    lexicalRank?: number | undefined;
+  }>();
+
+  const add = (
+    candidate: SearchCandidate,
+    rank: number,
+    source: 'semantic' | 'lexical',
+    evidenceClass?: EvidenceClass,
+  ) => {
+    const key = `${candidate.filePath}:${candidate.startLine}:${candidate.endLine}`;
+    const current = fused.get(key);
+    const score = (current?.score ?? 0) + 1 / (60 + rank);
+    const resolvedEvidence = evidenceClass ?? current?.evidenceClass ?? 'semantic-only';
+    fused.set(key, {
+      candidate: { ...candidate, ...(current?.candidate ?? {}) },
+      score,
+      lexical: current?.lexical || source === 'lexical',
+      evidenceClass: resolvedEvidence,
+      semanticRank: source === 'semantic' ? rank : current?.semanticRank,
+      lexicalRank: source === 'lexical' ? rank : current?.lexicalRank,
+    });
+  };
+
+  semantic.forEach((candidate, index) => add(candidate, index + 1, 'semantic'));
+  lexical.forEach((candidate, index) => {
+    add(candidate, index + 1, 'lexical', candidate.evidenceClass);
+  });
+
+  const explicitSymbol = isSymbolQuery(query.trim());
+  const symbolPriority = (item: typeof fused extends Map<string, infer V> ? V : never): number => {
+    if (!explicitSymbol) return 0;
+    const symbol = query.trim();
+    if (item.evidenceClass === 'exact-identifier' && isSymbolDefinition(item.candidate.text, symbol)) return 3;
+    if (item.evidenceClass === 'exact-identifier') return 2;
+    if (item.evidenceClass === 'exact-path') return 1;
+    return 0;
+  };
+  return [...fused.values()]
+    .sort((a, b) => symbolPriority(b) - symbolPriority(a) || b.score - a.score || b.candidate.score - a.candidate.score)
+    .slice(0, limit)
+    .map(item => withRetrievalEvidence(
+      item.candidate,
+      item.lexical,
+      item.score,
+      item.evidenceClass,
+      item.semanticRank,
+      item.lexicalRank,
+    ));
+}
+
+function withRetrievalEvidence(
+  candidate: SearchCandidate,
+  lexical: boolean,
+  fusionScore: number,
+  evidenceClass: EvidenceClass = 'semantic-only',
+  semanticRank?: number,
+  lexicalRank?: number,
+): SearchCandidate {
+  const output: SearchCandidate = { ...candidate };
+  Object.defineProperty(output, 'fusionScore', { value: fusionScore, enumerable: false, configurable: true, writable: true });
+  if (lexical || evidenceClass !== 'semantic-only') {
+    Object.defineProperty(output, 'lexicalEvidence', { value: true, enumerable: false, configurable: true, writable: true });
+  }
+  Object.defineProperty(output, 'evidenceClass', { value: evidenceClass, enumerable: false, configurable: true, writable: true });
+  if (semanticRank !== undefined) {
+    Object.defineProperty(output, 'semanticRank', { value: semanticRank, enumerable: false, configurable: true, writable: true });
+  }
+  if (lexicalRank !== undefined) {
+    Object.defineProperty(output, 'lexicalRank', { value: lexicalRank, enumerable: false, configurable: true, writable: true });
+  }
+  return output;
+}
+
+export function serializeCandidateDetails(candidate: SearchCandidate): Record<string, unknown> {
+  return {
+    filePath: candidate.filePath,
+    startLine: candidate.startLine,
+    endLine: candidate.endLine,
+    text: candidate.text,
+    score: candidate.score,
+    fusionScore: candidate.fusionScore,
+    lexicalEvidence: candidate.lexicalEvidence ?? false,
+    evidenceClass: candidate.evidenceClass ?? 'semantic-only',
+    semanticRank: candidate.semanticRank,
+    lexicalRank: candidate.lexicalRank,
+  };
+}
+
+const STOP_TERMS = new Set([
+  'find', 'where', 'is', 'the', 'a', 'an', 'what', 'how', 'does', 'for', 'and', 'in', 'of', 'to', 'with', 'logic', 'implemented', 'are'
+]);
+
+export function retrieveLexicalCandidates(query: string, regions: readonly SourceRegion[], limit = 50): SearchCandidate[] {
+  const queryRawTokens = extractRawTokens(query);
+  const querySubTokens = identifierTokens(query);
+  if (queryRawTokens.length === 0 && querySubTokens.length === 0) return [];
+
+  const queryNonStopRaw = queryRawTokens.filter(t => !STOP_TERMS.has(t.toLowerCase()));
+  const queryNonStopSub = querySubTokens.filter(t => !STOP_TERMS.has(t));
+
+  return regions
+    .map(region => {
+      const classification = classifyEvidence(query, queryRawTokens, queryNonStopRaw, queryNonStopSub, region);
+      return {
+        ...region,
+        score: classification.score,
+        evidenceClass: classification.evidenceClass,
+        lexicalEvidence: classification.evidenceClass !== 'semantic-only',
+      };
+    })
+    .filter(candidate => candidate.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit);
+}
+
+function extractRawTokens(text: string): string[] {
+  return text.match(/[A-Za-z0-9_$-]+/g) ?? [];
+}
+
+export function identifierTokens(text: string): string[] {
+  return (text.match(/[A-Z]?[a-z]+|[A-Z]+(?![a-z])|\d+/g) ?? []).map(token => token.toLowerCase());
+}
+
+function isSymbolQuery(query: string): boolean {
+  return /^[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*$/.test(query.trim());
+}
+
+function matchesWholeSymbol(text: string, symbol: string): boolean {
+  const escapedParts = symbol.split('.').map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const expression = escapedParts.join('\\s*\\.\\s*');
+  return new RegExp(`(^|[^A-Za-z0-9_$])${expression}(?![A-Za-z0-9_$])`).test(text);
+}
+
+/**
+ * A declaration/assignment is stronger navigation evidence than a call in a
+ * test or example. This is a ranking hint for explicit symbol queries only.
+ */
+function isSymbolDefinition(text: string, symbol: string): boolean {
+  const escapedParts = symbol.split('.').map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const expression = escapedParts.join('\\s*\\.\\s*');
+  const assigned = new RegExp(`(^|[^A-Za-z0-9_$])${expression}\\s*=(?!=)`);
+  const bareName = symbol.split('.').at(-1)!;
+  const declaration = new RegExp(`\\b(?:function|class|interface|type|const|let|var)\\s+${bareName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
+  return assigned.test(text) || (symbol === bareName && declaration.test(text));
+}
+
+function classifyEvidence(
+  query: string,
+  _rawTokens: string[],
+  nonStopRaw: string[],
+  nonStopSub: string[],
+  region: SourceRegion,
+): { score: number; evidenceClass: EvidenceClass } {
+  const filePath = region.filePath;
+  const regionText = region.text;
+  const trimmed = query.trim();
+
+  // Match the FULL requested symbol, especially dotted members such as
+  // app.listen. Matching just "app" is not an exact app.listen match.
+  if (isSymbolQuery(trimmed) && matchesWholeSymbol(regionText, trimmed)) {
+    return { score: isSymbolDefinition(regionText, trimmed) ? 1.2 : 1, evidenceClass: 'exact-identifier' };
+  }
+
+  // Identifier-shaped tokens mentioned in a longer question can also be
+  // useful; avoid promoting ordinary language words to exact symbols.
+  const technicalName = nonStopRaw.find(token =>
+    token.length >= 4 && /[A-Z_$]/.test(token) && matchesWholeSymbol(regionText, token)
+  );
+  if (technicalName) {
+    return { score: 0.9, evidenceClass: 'strong-lexical' };
+  }
+
+  // For a simple filename query, match complete path components rather than
+  // arbitrary substrings within path names.
+  if (isSymbolQuery(trimmed)) {
+    const lower = trimmed.toLowerCase();
+    const components = filePath.toLowerCase().split(/[/.]/);
+    if (components.includes(lower) || filePath.toLowerCase().endsWith('/' + lower)) {
+      return { score: 0.9, evidenceClass: 'exact-path' };
+    }
+  }
+
+  const regionTokens = new Set(identifierTokens(`${filePath} ${regionText}`));
+  const meaningfulTerms = [...new Set(nonStopSub)];
+  const matched = meaningfulTerms.filter(term => regionTokens.has(term));
+
+  if (meaningfulTerms.length >= 2 && matched.length === meaningfulTerms.length) {
+    return { score: 0.8, evidenceClass: 'strong-lexical' };
+  }
+  if (matched.length >= 2 && matched.length / meaningfulTerms.length >= 0.5) {
+    return { score: 0.5 * (matched.length / meaningfulTerms.length), evidenceClass: 'strong-lexical' };
+  }
+  if (matched.length > 0) {
+    return { score: 0.2 * (matched.length / meaningfulTerms.length), evidenceClass: 'partial-token' };
+  }
+
+  // Stopwords alone are never lexical evidence.
+  return { score: 0, evidenceClass: 'semantic-only' };
 }
 
 export function cosineSimilarity(left: readonly number[], right: readonly number[]): number {

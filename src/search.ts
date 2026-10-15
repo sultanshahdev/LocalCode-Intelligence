@@ -1,20 +1,22 @@
 import {
   createLocalEmbedder,
-  retrieveCandidates,
+  retrieveHybridCandidates,
   selectDisplayCandidates,
   type Embedder,
   type SearchCandidate,
 } from './retrieval.js';
 import { prepareSourceScope, type SourceScope } from './source.js';
+import { assessRelevance, type RelevanceAssessment } from './relevance.js';
 
 export type SearchFailureReason = 'unsupported-source-scope' | 'processing-failed';
 export type SearchResult =
   | {
       ok: true;
-      outcome: 'candidates' | 'no-supported-candidate';
+      outcome: 'candidates' | 'no-supported-candidate' | 'no-relevant-results';
       candidates: SearchCandidate[];
       withheldCandidates: number;
       scope: SourceScope;
+      relevance?: RelevanceAssessment;
     }
   | { ok: false; reason: SearchFailureReason; message: string };
 
@@ -48,14 +50,16 @@ export async function searchRepository(
 
   try {
     const embedder = await dependencies.createEmbedder();
-    const retrieved = await retrieveCandidates(query, scope.regions, embedder);
+    const retrieved = await retrieveHybridCandidates(query, scope.regions, embedder);
     const selection = selectDisplayCandidates(retrieved);
+    const relevance = assessRelevance(query, selection.candidates);
     return {
       ok: true,
-      outcome: selection.candidates.length > 0 ? 'candidates' : 'no-supported-candidate',
-      candidates: selection.candidates,
+      outcome: selection.candidates.length === 0 ? 'no-supported-candidate' : relevance.relevant ? 'candidates' : 'no-relevant-results',
+      candidates: relevance.relevant ? selection.candidates : [],
       withheldCandidates: selection.withheldCount,
       scope,
+      relevance,
     };
   } catch (error: unknown) {
     return failure('processing-failed', `Search could not complete retrieval: ${errorMessage(error)}. This does not mean relevant code is absent.`);
