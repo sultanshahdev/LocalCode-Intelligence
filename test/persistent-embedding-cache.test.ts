@@ -46,5 +46,13 @@ test('invalid vectors and disabled persistence fall back to inference and cache 
     await cache.embed([source]);
     await cache.clear();
     assert.deepEqual(await readdir(dir).catch(() => []), []);
+    const previous = process.env['LOCALCODE_DISABLE_PERSISTENT_CACHE'];
+    process.env['LOCALCODE_DISABLE_PERSISTENT_CACHE'] = '1';
+    try {
+      await new PersistentCachingEmbedder(fake(calls), 'disabled:model', dir).embed([source]);
+      assert.equal((await readdir(dir).catch(() => [])).some(name => name.endsWith('.json')), false);
+    } finally {
+      if (previous === undefined) delete process.env['LOCALCODE_DISABLE_PERSISTENT_CACHE']; else process.env['LOCALCODE_DISABLE_PERSISTENT_CACHE'] = previous;
+    }
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
