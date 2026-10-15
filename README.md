@@ -1,164 +1,139 @@
 # LocalCode Intelligence
 
-LocalCode Intelligence is a local-first CLI for finding inspectable source-code
-candidates from a natural-language description. It supports on-demand semantic
-search over JavaScript and TypeScript, plus repository-scope validation and search-readiness reporting.
+Local-first semantic code search for JavaScript and TypeScript repositories.  
+Runs entirely on your machine — no cloud, no indexing, no authentication.
+
+---
+
+## What It Does
+
+- Accepts a natural-language query and a local repository path
+- Discovers and segments `.js`/`.ts` source files
+- Embeds them locally using `Xenova/all-MiniLM-L6-v2` (Transformers.js, quantized)
+- Returns ranked candidate regions with similarity scores and source excerpts
+- Provides a polished dark web UI for browsing results and viewing source context
+
+---
 
 ## Requirements
 
-- Node.js 20 or newer
-- npm
+- **Node.js ≥ 20**
+- Internet access on first run (downloads the embedding model ~25 MB, cached after)
 
-## Install
+---
 
-```sh
-ONNXRUNTIME_NODE_INSTALL_CUDA=skip npm install
-npm run build
-npm link
+## Installation
+
+```bash
+git clone https://github.com/sultanshahdev/LocalCode-Intelligence.git
+cd LocalCode-Intelligence
+npm install
+npm install --prefix web
 ```
 
-The environment variable prevents ONNX Runtime's Linux installer from fetching
-optional CUDA libraries. LocalCode uses CPU inference and does not require them.
+---
 
-`npm link` makes the `localcode` executable available from your shell. During
-development, you can run the same command without linking via `npm run localcode --`.
+## Running
 
-## Search by behavior
+### Development (hot-reload frontend + backend)
 
-```sh
-localcode search "where is an expired session rejected?" --repo ./path/to/source
+```bash
+npm run dev
 ```
 
-Or, without `npm link`:
+- Backend API: `http://127.0.0.1:4317`
+- Frontend (Vite dev): `http://localhost:5173`
 
-```sh
-npm run localcode -- search "where is an expired session rejected?" --repo ./path/to/source
+### Production
+
+```bash
+npm run build      # compile TypeScript + bundle Vite frontend
+npm start          # serve everything from http://127.0.0.1:4317
 ```
 
-The first search downloads the quantized `Xenova/all-MiniLM-L6-v2` ONNX model
-(about 23 MB, plus tokenizer/configuration files) from Hugging Face. Transformers.js
-caches it under `node_modules/@huggingface/transformers/.cache/`; later searches
-reuse that cache and can run offline. Model acquisition is separate from search:
-repository paths, source text, and embeddings are processed locally and are not
-sent to Hugging Face or any inference API. LocalCode contains no telemetry.
+Open **http://127.0.0.1:4317** in your browser.
 
-Semantic search uses the bundled CPU execution provider. Security overrides
-keep `sharp` at 0.35.5 (patched native image
-libraries) and `global-agent` at 4.1.3 (removing the vulnerable legacy logging
-chain used only by ONNX Runtime's installer). These overrides are recorded in
-the lockfile and covered by the real-model integration test.
+---
 
-Search results include the relative file path, exact one-based line range,
-cosine similarity score, and actual source excerpt. Similarity orders candidates
-for inspection; it is not proof that a candidate implements the requested behavior.
-Every displayed match is labeled as unverified and uncertain. A score is a ranking
-signal, not a probability of correctness. Git metadata is not required.
+## CLI (preserved)
 
-LocalCode displays only retrieved candidates with positive cosine alignment. Zero
-is used as a mathematical display floor: zero or negative alignment means the
-vectors are orthogonal or point in opposing directions. This is not a calibrated
-relevance threshold, and even a positive score can be unrelated. When every
-retrieved candidate is non-positive, the command reports a successful search with
-no sufficiently supported candidate and explicitly avoids claiming that the
-behavior is absent. Model or processing failures remain errors, and source-coverage
-warnings remain visible for both candidate and no-candidate outcomes.
+```bash
+# Repository validation
+node dist/src/cli.js repo check /path/to/repo
 
-## Check repository search readiness
+# Repository status
+node dist/src/cli.js repo status /path/to/repo
 
-```sh
-localcode repo status ./path/to/source
+# Semantic search
+node dist/src/cli.js search "your query" --repo /path/to/repo
 ```
 
-This read-only command validates the directory with the same rules as `repo check`,
-then runs the same bounded JavaScript/TypeScript discovery and source preparation
-used by search. It reports the resolved path, supported files found, files processed,
-source eligibility, and whether concrete size or count limits made coverage partial.
-Git metadata is not required.
+---
 
-Status is a current inspection, not a stored result: each invocation scans the scope
-again. `Source eligibility: Available` means at least one non-empty source region can
-be prepared under the configured rules. It does not mean the whole repository is
-covered. Empty files and files skipped by limits do not provide eligible content.
+## API
 
-The command does not initialize or download the embedding model, execute semantic
-retrieval, create an index, or modify the inspected repository. The explicit
-preparation, persistent-index, model-readiness, and search-execution fields make
-these boundaries clear. A successful search is the only current way to verify
-model readiness and retrieval execution.
+All routes are bound to `127.0.0.1` only (localhost).
 
-## Check a repository scope
+| Method | Route | Description |
+|--------|-------|-------------|
+| GET | `/api/health` | Service health |
+| POST | `/api/repo/status` | Inspect repository source scope |
+| POST | `/api/search` | Semantic search |
+| POST | `/api/source` | Read source lines (read-only, path-safe) |
 
-```sh
-localcode repo check ./path/to/source
+### POST /api/repo/status
+```json
+{ "repositoryPath": "/absolute/path/to/repo" }
 ```
 
-Or, without `npm link`:
-
-```sh
-npm run localcode -- repo check ./path/to/source
+### POST /api/search
+```json
+{ "query": "your natural language query", "repositoryPath": "/path/to/repo" }
 ```
 
-On success, LocalCode reports the resolved absolute directory:
-
-```text
-Validated repository scope: /absolute/path/to/source
-Status: directory is readable; indexing has not been performed.
+### POST /api/source
+```json
+{ "repositoryPath": "/path/to/repo", "filePath": "src/foo.ts", "startLine": 10, "endLine": 50 }
 ```
 
-The path may be relative or absolute and may contain spaces. It must exist, be
-a directory, and permit read-only access (including directory traversal where
-the operating system requires it). Git metadata is not required.
+---
 
-Exit statuses are `0` for successful validation, `1` when the path cannot be
-used, and `2` for command or argument usage errors. Errors are written to
-standard error.
+## Limitations
 
-## Tests
+- **JavaScript and TypeScript only** — `.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`, `.tsx`, `.mts`, `.cts`
+- **File limits**: max 500 files, 256 KB per file, 5 MB total scope per search
+- **First search is slow**: model download (~25 MB) + embedding all files takes time. Subsequent searches in the same server session reuse the cached model.
+- **No persistent index**: the repository is re-embedded on every search request
+- **Similarity is not verified relevance**: results are unverified semantic candidates; the model may surface irrelevant code
+- **Localhost only**: the server binds to `127.0.0.1` and rejects cross-origin requests from external origins
+- **No authentication, no database, no cloud**
 
-```sh
-npm test
+---
+
+## Security
+
+- API binds exclusively to `127.0.0.1:4317`
+- Source viewer validates all file paths: rejects absolute paths, traversal (`../`), and symlinks
+- JSON request bodies are bounded at 64 KB
+- Browser origin is checked; external origins are rejected
+
+---
+
+## Project Structure
+
 ```
-
-Ordinary tests are deterministic and do not load or download a model. To run the
-real local-model integration test after installing dependencies:
-
-```sh
-npm run build
-LOCALCODE_RUN_MODEL_TEST=1 node --test dist/test/model.integration.test.js
+src/           Backend TypeScript (CLI + API server + search engine)
+  cli.ts       Command-line interface
+  server.ts    HTTP API server
+  search.ts    Search orchestration
+  retrieval.ts Embedding + cosine similarity
+  source.ts    Source discovery and segmentation
+  status.ts    Repository status inspection
+  repository.ts Repository path validation
+web/           Frontend (React + TypeScript + Vite)
+  src/App.tsx  Main application
+  src/api.ts   API client
+  src/index.css Dark developer stylesheet
+dist/          Compiled backend (after npm run build)
+web/dist/      Bundled frontend (after npm run build)
 ```
-
-The controlled fixture and its human label are in
-`test/fixtures/semantic-repository`. A reproducible end-to-end demonstration is:
-
-```sh
-npm run localcode -- search \
-  "where is an expired session rejected?" \
-  --repo test/fixtures/semantic-repository
-```
-
-Tests create isolated fixtures in the operating system's temporary directory;
-they do not modify the repository being checked.
-
-## Search scope and limits
-
-- Supported extensions are `.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`, `.tsx`,
-  `.mts`, and `.cts`.
-- Symlinks are not followed. Common dependency, cache, generated, and build
-  directories are skipped, including `.git`, `node_modules`, `dist`, `build`,
-  `coverage`, `.next`, `.nuxt`, `out`, `vendor`, `generated`, and `.cache`.
-- Search processes at most 500 files, 256 KiB per file, and 5 MiB total source
-  per invocation. Output warnings identify when these limits reduce coverage.
-- Source is segmented into overlapping 40-line windows (10-line overlap), not
-  parsed functions or symbols. Consequently, a candidate can span multiple
-  functions or omit nearby context.
-- Preparation and embeddings are on demand; there is no persistent repository
-  index, incremental update, background service, or file watcher.
-- The compact general text embedding model understands many intent/code
-  relationships but is not a code-analysis engine. Ranking quality can vary,
-  especially for domain-specific vocabulary and behavior that requires tracing
-  calls across files.
-- Validation is not persisted between CLI invocations, and searching requires
-  readable supported source content.
-- Access-denied behavior is tested with deterministic filesystem substitutes,
-  because permission-bit integration tests are unreliable when tests run with
-  elevated privileges or on platforms with different permission models.

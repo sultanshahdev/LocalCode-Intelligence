@@ -1,3 +1,6 @@
 node_modules/
 dist/
 *.tgz
+web/node_modules/
+web/dist/
+web/dist-types/
