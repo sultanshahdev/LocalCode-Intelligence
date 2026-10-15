@@ -6,7 +6,15 @@ import { validateRepositoryDirectory } from './repository.js';
 import { searchRepository, type SearchResult } from './search.js';
 import { inspectRepositorySearchStatus, type RepositoryStatusResult } from './status.js';
 import { prepareSourceScope } from './source.js';
-import { createLocalEmbedder, retrieveCandidates, retrieveHybridCandidates, retrieveLexicalCandidates } from './retrieval.js';
+import {
+  createLocalEmbedder,
+  retrieveCandidates,
+  retrieveHybridCandidates,
+  retrieveLexicalCandidates,
+  selectDisplayCandidates,
+  serializeCandidateDetails,
+  type SearchCandidate,
+} from './retrieval.js';
 import { assessRelevance } from './relevance.js';
 
 const REPO_USAGE = 'Usage: localcode repo check <path>';
@@ -67,16 +75,86 @@ export async function runCli(
 }
 
 async function runDiagnostic(args: readonly string[], streams: CliStreams): Promise<number> {
-  if (process.env['NODE_ENV'] === 'production') { streams.stderr.write('Diagnostics are disabled in production.\n'); return 2; }
+  if (process.env['NODE_ENV'] === 'production') {
+    streams.stderr.write('Diagnostics are disabled in production.\n');
+    return 2;
+  }
   const [query, repoFlag, repositoryPath] = args;
-  if (!query || repoFlag !== '--repo' || !repositoryPath) { streams.stderr.write('Usage: localcode diagnose "query" --repo <path>\n'); return 2; }
-  const scope = await prepareSourceScope(repositoryPath);
+  if (!query || repoFlag !== '--repo' || !repositoryPath) {
+    streams.stderr.write('Usage: localcode diagnose "query" --repo <path>\n');
+    return 2;
+  }
+
+  const validation = await validateRepositoryDirectory(repositoryPath);
+  if (!validation.ok) {
+    streams.stderr.write(`${validation.message}\n`);
+    return 1;
+  }
+
+  const scope = await prepareSourceScope(validation.resolvedPath);
   const embedder = await createLocalEmbedder();
+
+  // Top 20 semantic and lexical pools
   const semantic = await retrieveCandidates(query, scope.regions, embedder, 20);
   const lexical = retrieveLexicalCandidates(query, scope.regions, 20);
-  const fused = await retrieveHybridCandidates(query, scope.regions, embedder, 20);
-  const relevance = assessRelevance(query, fused);
-  streams.stdout.write(JSON.stringify({ query, coverage: { filesProcessed: scope.filesProcessed, filesDiscovered: scope.filesDiscovered, warnings: scope.warnings, regions: scope.regions.length }, semantic, lexical, fusion: fused, relevance, displayed: fused.filter(candidate => candidate.score > 0 || candidate.lexicalEvidence) }, null, 2) + '\n');
+
+  // Top 20 fused
+  const fused20 = await retrieveHybridCandidates(query, scope.regions, embedder, 20);
+
+  // Production search parity: Top 5 hybrid retrieval, display selection, relevance decision
+  const productionHybridTop5 = await retrieveHybridCandidates(query, scope.regions, embedder, 5);
+  const displaySelection = selectDisplayCandidates(productionHybridTop5);
+  const relevanceDecision = assessRelevance(query, displaySelection.candidates);
+
+  const productionFinalTop5 = relevanceDecision.relevant ? displaySelection.candidates : [];
+
+  // Track discarded candidates from production selection
+  const discardedCandidates = productionHybridTop5
+    .filter(c => !productionFinalTop5.some(final =>
+      final.filePath === c.filePath && final.startLine === c.startLine && final.endLine === c.endLine
+    ))
+    .map(c => {
+      let discardReason: string;
+      if (!relevanceDecision.relevant) {
+        discardReason = 'relevance-assessment-insufficient-evidence';
+      } else if (c.score <= 0 && !c.lexicalEvidence) {
+        discardReason = 'non-positive-cosine-without-lexical-evidence';
+      } else {
+        discardReason = 'filtered-from-display';
+      }
+      return {
+        ...serializeCandidateDetails(c),
+        finalVisibility: false,
+        discardReason,
+      };
+    });
+
+  const diagnosticResult = {
+    query,
+    repository: validation.resolvedPath,
+    sourceCoverage: {
+      filesProcessed: scope.filesProcessed,
+      filesDiscovered: scope.filesDiscovered ?? scope.filesProcessed,
+      warnings: scope.warnings,
+      regions: scope.regions.length,
+    },
+    semanticTop20: semantic.map(serializeCandidateDetails),
+    lexicalTop20: lexical.map(serializeCandidateDetails),
+    fusedTop20: fused20.map(serializeCandidateDetails),
+    productionFinalTop5: productionFinalTop5.map(c => ({
+      ...serializeCandidateDetails(c),
+      finalVisibility: true,
+    })),
+    discardedCandidates,
+    relevanceDecision,
+    productionOutcome: displaySelection.candidates.length === 0
+      ? 'no-supported-candidate'
+      : relevanceDecision.relevant
+        ? 'candidates'
+        : 'no-relevant-results',
+  };
+
+  streams.stdout.write(JSON.stringify(diagnosticResult, null, 2) + '\n');
   return 0;
 }
 
