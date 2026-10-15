@@ -227,6 +227,12 @@ export async function retrieveHybridCandidates(
     if (!explicitSymbol) return 0;
     const symbol = query.trim();
     if (item.evidenceClass === 'exact-identifier' && isSymbolDefinition(item.candidate.text, symbol)) return 3;
+    // When an implementation is anonymously exported, its filename is the
+    // navigation symbol. Treat that source as a definition rather than
+    // prioritizing imports/call sites that mention the symbol in their text.
+    const basename = item.candidate.filePath.split('/').at(-1)?.replace(/\.[cm]?[jt]sx?$/i, '') ?? '';
+    if (item.evidenceClass === 'exact-path' && basename.toLowerCase() === symbol.toLowerCase() &&
+        /\bexport\s+default\b|\bmodule\.exports\s*=/.test(item.candidate.text)) return 3;
     if (item.evidenceClass === 'exact-identifier') return 2;
     if (item.evidenceClass === 'exact-path') return 1;
     return 0;
@@ -368,7 +374,19 @@ function isSymbolDefinition(text: string, symbol: string): boolean {
   const assigned = new RegExp(`(^|[^A-Za-z0-9_$])${expression}\\s*=(?!=)`);
   const bareName = symbol.split('.').at(-1)!;
   const declaration = new RegExp(`\\b(?:function|class|interface|type|const|let|var)\\s+${bareName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
-  return assigned.test(text) || (symbol === bareName && declaration.test(text));
+  const escapedBare = escapedParts.at(-1)!;
+  const isImportAlias = symbol === bareName &&
+    new RegExp('\\b(?:const|let|var)\\s+' + escapedBare +
+      '\\s*=\\s*(?:require\\s*\\(|(?:await\\s+)?import\\s*\\()').test(text);
+  const isNamedImplementation = symbol === bareName &&
+    new RegExp('\\b(?:function|class|interface|type)\\s+' + escapedBare + '\\b').test(text);
+  const isSymbolObjectProperty = symbol === bareName &&
+    new RegExp('\\b' + escapedBare + '\\s*:\\s*Symbol\\s*\\(').test(text);
+  // A const identifier imported via require() is a reference, not its
+  // implementation. CommonJS object keys initialized with Symbol() ARE
+  // definitions, even though they lack a declaration keyword.
+  return isNamedImplementation || isSymbolObjectProperty ||
+    (!isImportAlias && (assigned.test(text) || (symbol === bareName && declaration.test(text))));
 }
 
 function classifyEvidence(
