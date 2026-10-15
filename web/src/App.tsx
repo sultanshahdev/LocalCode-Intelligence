@@ -315,10 +315,7 @@ export default function App() {
     const current = ++generation.current;
     setRepoLoading(true);
     setRepoError(null);
-    setRepoStatus(null);
-    setResolvedPath('');
-    setSearchResult(null);
-    setActiveSource(null);
+    if (!refresh) { setRepoStatus(null); setResolvedPath(''); setSearchResult(null); setActiveSource(null); }
     try {
       const result = await apiPrepareRepository(sourceType, path, refresh);
       if (current !== generation.current) return;
@@ -341,7 +338,8 @@ export default function App() {
     }
   }, [repoPath, sourceType]);
 
-  const changeSource = (type: 'local' | 'github') => { generation.current += 1; setSourceType(type); setRepositoryId(undefined); setRepoStatus(null); setResolvedPath(''); setGithubSource(null); setSearchResult(null); setSearchError(null); setActiveSource(null); };
+  const invalidateRepository = () => { generation.current += 1; setRepoLoading(false); setSearchLoading(false); setRepositoryId(undefined); setRepoStatus(null); setResolvedPath(''); setGithubSource(null); setSearchResult(null); setSearchError(null); setRepoError(null); setActiveSource(null); };
+  const changeSource = (type: 'local' | 'github') => { invalidateRepository(); setSourceType(type); };
 
   const handleSearch = useCallback(async () => {
     const q = query.trim();
@@ -398,7 +396,7 @@ export default function App() {
               type="text"
               placeholder={sourceType === 'local' ? 'Absolute path, e.g. /home/user/my-project' : 'https://github.com/owner/repository'}
               value={repoPath}
-              onChange={(e) => { generation.current += 1; setRepoPath(e.target.value); setRepositoryId(undefined); setRepoStatus(null); setSearchResult(null); setActiveSource(null); }}
+              onChange={(e) => { invalidateRepository(); setRepoPath(e.target.value); }}
               onKeyDown={(e) => { if (e.key === 'Enter') void handleCheckRepo(); }}
               aria-label={sourceType === 'local' ? 'Repository path' : 'Public GitHub repository URL'}
               spellCheck={false}
