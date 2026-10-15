@@ -28,7 +28,7 @@ export interface SearchDependencies {
 
 const defaultDependencies: SearchDependencies = {
   prepare: prepareSourceScope,
-  createEmbedder: async () => new PersistentCachingEmbedder(new CachingEmbedder(await createLocalEmbedder()), 'Xenova/all-MiniLM-L6-v2:q8'),
+  createEmbedder: async () => new PersistentCachingEmbedder(new CachingEmbedder(await createLocalEmbedder()), 'Xenova/all-MiniLM-L6-v2:q8', undefined, 384),
 };
 
 export async function searchRepository(
