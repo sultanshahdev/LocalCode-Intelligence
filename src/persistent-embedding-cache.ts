@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, readdir, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { Embedder } from './retrieval.js';
+import type { Embedder, EmbeddingRequestOptions } from './retrieval.js';
 
 const FORMAT = 1;
 const MAX_ENTRIES = 2_000;
@@ -40,15 +40,21 @@ export class PersistentEmbeddingCache {
       const target = this.file(text);
       const temp = join(this.directory, `.${randomUUID()}.tmp`);
       await writeFile(temp, JSON.stringify({ format: FORMAT, model: this.model, vector }), { mode: 0o600 });
-      await rename(temp, target);
-      void this.evict();
+      try {
+        await rename(temp, target);
+      } finally {
+        await rm(temp, { force: true }).catch(() => undefined);
+      }
     } catch { /* cache storage is optional */ }
   }
   async clear(): Promise<void> {
-    // This directory is application-owned; never accept an arbitrary deletion target here.
-    await rm(this.directory, { recursive: true, force: true });
+    // Only remove this application's hashed cache records, never recursively
+    // delete a custom directory that might also contain unrelated files.
+    const names = await readdir(this.directory).catch(() => []);
+    await Promise.all(names.filter(name => /^[0-9a-f]{64}\.json$/.test(name))
+      .map(name => rm(join(this.directory, name), { force: true })));
   }
-  private async evict(): Promise<void> {
+  async evict(): Promise<void> {
     try {
       const entries = await Promise.all((await readdir(this.directory)).filter(x => x.endsWith('.json')).map(async name => ({ name, info: await stat(join(this.directory, name)) })));
       entries.sort((a, b) => a.info.mtimeMs - b.info.mtimeMs);
@@ -65,12 +71,17 @@ function validVector(value: unknown): value is number[] {
 export class PersistentCachingEmbedder implements Embedder {
   private readonly cache: PersistentEmbeddingCache;
   constructor(private readonly delegate: Embedder, modelIdentity: string, directory?: string) { this.cache = new PersistentEmbeddingCache(modelIdentity, directory); }
-  async embed(texts: readonly string[]): Promise<number[][]> {
+  async embed(texts: readonly string[], options?: EmbeddingRequestOptions): Promise<number[][]> {
     if (persistentCacheDisabled()) return this.delegate.embed(texts);
     const output: Array<number[] | undefined> = new Array(texts.length);
     const missing: Array<{ text: string; index: number }> = [];
     await Promise.all(texts.map(async (text, index) => {
-      if (!text.startsWith(SOURCE_PREFIX)) { missing.push({ text, index }); return; }
+      // Never infer input role from user-controlled query text. The caller
+      // explicitly marks the source slice, and its canonical prefix is
+      // checked as an additional safeguard.
+      const isSource = index >= (options?.sourceStartIndex ?? Number.POSITIVE_INFINITY) &&
+        text.startsWith(SOURCE_PREFIX);
+      if (!isSource) { missing.push({ text, index }); return; }
       output[index] = await this.cache.get(text);
       if (output[index] === undefined) missing.push({ text, index });
     }));
@@ -79,8 +90,13 @@ export class PersistentCachingEmbedder implements Embedder {
       if (vectors.length !== missing.length || vectors.some(vector => !validVector(vector))) throw new Error('Embedding runtime returned invalid vectors.');
       await Promise.all(missing.map(async (item, index) => {
         const vector = vectors[index]!; output[item.index] = vector;
-        if (item.text.startsWith(SOURCE_PREFIX)) await this.cache.set(item.text, vector);
+        if (item.index >= (options?.sourceStartIndex ?? Number.POSITIVE_INFINITY) &&
+            item.text.startsWith(SOURCE_PREFIX)) await this.cache.set(item.text, vector);
       }));
+      // Scan and evict ONCE per batch, not once per newly written region.
+      // This avoids thousands of directory scans on cold large repositories.
+      if (missing.some(item => item.index >= (options?.sourceStartIndex ?? Number.POSITIVE_INFINITY) &&
+          item.text.startsWith(SOURCE_PREFIX))) await this.cache.evict();
     }
     return output as number[][];
   }
