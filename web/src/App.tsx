@@ -60,8 +60,6 @@ function SourceViewer({ repositoryPath, candidate, onClose }: SourceViewerProps)
   const [error, setError] = useState<string | null>(null);
   const highlightRef = useRef<HTMLDivElement>(null);
 
-  const contextStart = Math.max(1, candidate.startLine - 25);
-  const contextEnd = candidate.endLine + 25;
   const location = `${candidate.filePath}:${candidate.startLine}-${candidate.endLine}`;
 
   useEscapeKey(onClose);
@@ -70,14 +68,14 @@ function SourceViewer({ repositoryPath, candidate, onClose }: SourceViewerProps)
     setLoading(true);
     setError(null);
     setSourceData(null);
-    apiSource(repositoryPath, candidate.filePath, contextStart, contextEnd)
+    apiSource(repositoryPath, candidate.filePath, candidate.startLine, candidate.endLine, 25)
       .then((result) => {
         setSourceData(result);
         if (!result.ok) setError(result.message ?? 'Source read failed');
       })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Unknown error'))
       .finally(() => setLoading(false));
-  }, [repositoryPath, candidate.filePath, contextStart, contextEnd]);
+  }, [repositoryPath, candidate.filePath, candidate.startLine, candidate.endLine]);
 
   // Scroll highlighted region into view once loaded
   useEffect(() => {
@@ -130,12 +128,12 @@ function SourceViewer({ repositoryPath, candidate, onClose }: SourceViewerProps)
           {!loading && !error && sourceData?.ok && sourceData.lines && (
             <pre className="sv-code">
               {sourceData.lines.map((line, idx) => {
-                const lineNum = contextStart + idx;
+                const lineNum = (sourceData.startLine ?? candidate.startLine) + idx;
                 const isHighlighted = lineNum >= candidate.startLine && lineNum <= candidate.endLine;
                 return (
                   <div
                     key={lineNum}
-                    ref={isHighlighted && idx === 0 ? highlightRef : undefined}
+                    ref={isHighlighted && lineNum === candidate.startLine ? highlightRef : undefined}
                     className={`sv-line${isHighlighted ? ' sv-line--hl' : ''}`}
                   >
                     <span className="sv-ln">{lineNum}</span>
@@ -183,8 +181,8 @@ function ResultCard({ candidate, index, onViewSource }: ResultCardProps) {
           </div>
           <div className="card-location-row">
             <span className="card-lines">lines {candidate.startLine}–{candidate.endLine}</span>
-            <span className={`score-pill score-pill--${tier}`} title={`Cosine similarity: ${score.toFixed(4)}`}>
-              {scorePct}% match
+            <span className={`score-pill score-pill--${tier}`} title={`Cosine similarity (ranking signal, not a probability): ${score.toFixed(4)}`}>
+              Similarity {score.toFixed(3)}
             </span>
           </div>
         </div>
