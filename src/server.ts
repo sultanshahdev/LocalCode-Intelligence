@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { validateRepositoryDirectory } from './repository.js';
 import { inspectRepositorySearchStatus } from './status.js';
 import { searchRepository } from './search.js';
-import { createLocalEmbedder, type Embedder } from './retrieval.js';
+import { CachingEmbedder, createLocalEmbedder, type Embedder } from './retrieval.js';
 import { prepareSourceScope, DEFAULT_SOURCE_LIMITS } from './source.js';
 
 const HOST = '127.0.0.1';
@@ -22,11 +22,21 @@ const MAX_BODY_BYTES = 64 * 1024; // 64 KB
 
 // ── Cached embedder ───────────────────────────────────────────────────────────
 let cachedEmbedder: Embedder | null = null;
+let embedderInitialization: Promise<Embedder> | null = null;
 async function getEmbedder(): Promise<Embedder> {
-  if (cachedEmbedder === null) {
-    cachedEmbedder = await createLocalEmbedder();
+  if (cachedEmbedder !== null) return cachedEmbedder;
+  if (embedderInitialization === null) {
+    embedderInitialization = createLocalEmbedder()
+      .then(embedder => {
+        cachedEmbedder = new CachingEmbedder(embedder);
+        return cachedEmbedder;
+      })
+      .catch(error => {
+        embedderInitialization = null;
+        throw error;
+      });
   }
-  return cachedEmbedder;
+  return embedderInitialization;
 }
 
 // ── CORS / origin guard ───────────────────────────────────────────────────────
