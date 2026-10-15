@@ -1,10 +1,12 @@
 import { performance } from 'node:perf_hooks';
+import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { readFileSync, writeFileSync } from 'node:fs';
 
 import { prepareSourceScope, type SourceScope, type SourceRegion } from '../src/source.js';
 import {
   createLocalEmbedder,
+  CachingEmbedder,
   retrieveCandidates,
   retrieveHybridCandidates,
   retrieveLexicalCandidates,
@@ -15,7 +17,10 @@ import {
 import { assessRelevance } from '../src/relevance.js';
 import { BENCHMARK_DATASET, type BenchmarkQuery } from './benchmark-dataset.js';
 
-const REPO_ROOT = '/home/sultan/Desktop/repos/benchmarks';
+const REPO_ROOT = process.env['LOCALCODE_BENCHMARK_ROOT'] ?? '/home/sultan/Desktop/repos/benchmarks';
+const SELECTED_REPOS = (process.env['LOCALCODE_BENCHMARK_REPOS'] ?? 'express,axios,fastify,localcode')
+  .split(',').map(value => value.trim()).filter(Boolean);
+const SELECTED_SPLIT = process.env['LOCALCODE_BENCHMARK_SPLIT'] ?? 'all';
 const REPO_PATHS: Record<string, string> = {
   express: resolve(REPO_ROOT, 'express'),
   axios: resolve(REPO_ROOT, 'axios'),
@@ -150,6 +155,16 @@ export async function runBenchmark(config: PipelineConfig, embedder: Embedder, m
   const repoCoverage: BenchmarkMetrics['repoCoverage'] = {};
 
   for (const [repoKey, repoPath] of Object.entries(REPO_PATHS)) {
+    if (!SELECTED_REPOS.includes(repoKey)) continue;
+    let checkedOutCommit: string;
+    try {
+      checkedOutCommit = execFileSync('git', ['-C', repoPath, 'rev-parse', 'HEAD'], { encoding: 'utf8', timeout: 10_000 }).trim();
+    } catch {
+      throw new Error(`Missing or unreadable benchmark checkout for ${repoKey}: ${repoPath}`);
+    }
+    if (checkedOutCommit !== REPO_COMMITS[repoKey]) {
+      throw new Error(`Wrong revision for ${repoKey}: expected ${REPO_COMMITS[repoKey]}, found ${checkedOutCommit}. Do not evaluate unpinned source.`);
+    }
     const scope = await prepareSourceScope(repoPath);
     scopes[repoKey] = scope;
     repoCoverage[repoKey] = {
@@ -163,8 +178,10 @@ export async function runBenchmark(config: PipelineConfig, embedder: Embedder, m
 
   const results: QueryEvaluationResult[] = [];
 
-  for (let i = 0; i < BENCHMARK_DATASET.length; i++) {
-    const item = BENCHMARK_DATASET[i]!;
+  const selectedDataset = BENCHMARK_DATASET.filter(item =>
+    SELECTED_REPOS.includes(item.repo) && (SELECTED_SPLIT === 'all' || item.split === SELECTED_SPLIT));
+  for (let i = 0; i < selectedDataset.length; i++) {
+    const item = selectedDataset[i]!;
     const scope = scopes[item.repo];
     if (!scope) throw new Error(`Missing scope for ${item.repo}`);
 
@@ -240,7 +257,7 @@ export async function runBenchmark(config: PipelineConfig, embedder: Embedder, m
       : correctAbstention ? '✓ ABSTAIN' : '✗ FP';
 
     console.log(
-      `[${String(i + 1).padStart(2)}/60] ${item.repo.padEnd(9)} | ${statusMark.padEnd(9)} | "${item.query.slice(0, 35).padEnd(35)}" | top: ${evalResult.topCandidateFile ?? 'none'}`
+      `[${String(i + 1).padStart(2)}/${selectedDataset.length}] ${item.repo.padEnd(9)} | ${statusMark.padEnd(9)} | "${item.query.slice(0, 35).padEnd(35)}" | top: ${evalResult.topCandidateFile ?? 'none'}`
     );
   }
 
@@ -281,6 +298,15 @@ export async function runBenchmark(config: PipelineConfig, embedder: Embedder, m
 }
 
 async function main() {
+  if (SELECTED_REPOS.length === 0 || SELECTED_REPOS.some(repo => !(repo in REPO_PATHS))) {
+    throw new Error('LOCALCODE_BENCHMARK_REPOS must contain at least one of express, axios, fastify, localcode.');
+  }
+  if (!['all', 'tuning', 'evaluation'].includes(SELECTED_SPLIT)) {
+    throw new Error('LOCALCODE_BENCHMARK_SPLIT must be all, tuning, or evaluation.');
+  }
+  console.log(`Benchmark checkout root: ${REPO_ROOT}`);
+  console.log(`Selected repositories: ${SELECTED_REPOS.join(', ')}`);
+  console.log(`Query split: ${SELECTED_SPLIT}`);
   const configs: PipelineConfig[] = ['semantic-only', 'earlier-hybrid', 'corrected-hybrid'];
   const allMetrics: Record<string, BenchmarkMetrics> = {};
 
@@ -290,11 +316,16 @@ async function main() {
   console.log(`Global Model initialized in ${(modelInitLatencyMs / 1000).toFixed(2)}s\n`);
 
   for (const cfg of configs) {
-    allMetrics[cfg] = await runBenchmark(cfg, rawEmbedder, modelInitLatencyMs);
+    // Cache source vectors independently for each configuration: each configuration
+    // pays its own first-embedding cost, then reuses unchanged code regions.
+    const cachedEmbedder = new CachingEmbedder(rawEmbedder, 20_000);
+    allMetrics[cfg] = await runBenchmark(cfg, cachedEmbedder, modelInitLatencyMs);
   }
 
   // Save raw json output
-  writeFileSync('/tmp/benchmark-metrics.json', JSON.stringify(allMetrics, null, 2));
+  const reportPath = process.env['LOCALCODE_BENCHMARK_OUTPUT'] ?? '/tmp/benchmark-metrics.json';
+  writeFileSync(reportPath, JSON.stringify({ repositoryCommits: Object.fromEntries(SELECTED_REPOS.map(repo => [repo, REPO_COMMITS[repo]])), selectedSplit: SELECTED_SPLIT, metrics: allMetrics }, null, 2));
+  console.log(`Machine-readable metrics: ${reportPath}`);
 
   console.log('\n========================================================');
   console.log('SUMMARY COMPARISON REPORT');
