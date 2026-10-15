@@ -1,24 +1,35 @@
 # LocalCode Intelligence
 
-Local-first semantic code search for JavaScript and TypeScript repositories.  
-Runs entirely on your machine — no cloud, no indexing, no authentication.
+A local-first semantic code search tool for JavaScript and TypeScript repositories.  
+Runs entirely on your machine — no cloud, no telemetry, no authentication, no persistent index.
+
+---
+
+<!-- Screenshot placeholder: replace with an actual screenshot of the web UI -->
+<!-- ![LocalCode Intelligence UI](docs/screenshot.png) -->
 
 ---
 
 ## What It Does
 
-- Accepts a natural-language query and a local repository path
-- Discovers and segments `.js`/`.ts` source files
-- Embeds them locally using `Xenova/all-MiniLM-L6-v2` (Transformers.js, quantized)
-- Returns ranked candidate regions with similarity scores and source excerpts
-- Provides a polished dark web UI for browsing results and viewing source context
+- Takes a natural-language query and a local repository path
+- Discovers and segments `.js` / `.ts` source files (and variants)
+- Embeds everything locally using `Xenova/all-MiniLM-L6-v2` via Transformers.js (quantized, ~23 MB)
+- Returns ranked candidate code regions with cosine similarity scores and source excerpts
+- Provides a polished dark web UI for browsing results and inspecting source context in place
+
+All embeddings and inference run in the same Node.js process that serves the UI.  
+Nothing leaves your machine.
 
 ---
 
 ## Requirements
 
-- **Node.js ≥ 20**
-- Internet access on first run (downloads the embedding model ~25 MB, cached after)
+| | |
+|---|---|
+| **Node.js** | ≥ 20 |
+| **Internet** | Required on first run only (downloads the embedding model, ~23 MB, then cached) |
+| **Source type** | JavaScript and TypeScript only |
 
 ---
 
@@ -27,7 +38,11 @@ Runs entirely on your machine — no cloud, no indexing, no authentication.
 ```bash
 git clone https://github.com/sultanshahdev/LocalCode-Intelligence.git
 cd LocalCode-Intelligence
+
+# Root dependencies (backend + CLI)
 npm install
+
+# Frontend dependencies
 npm install --prefix web
 ```
 
@@ -35,36 +50,57 @@ npm install --prefix web
 
 ## Running
 
-### Development (hot-reload frontend + backend)
+### Development (hot-reload frontend + backend watch)
 
 ```bash
 npm run dev
 ```
 
-- Backend API: `http://127.0.0.1:4317`
-- Frontend (Vite dev): `http://localhost:5173`
+- **API + static server**: `http://127.0.0.1:4317`
+- **Vite dev server** (frontend HMR): `http://localhost:5173`
+
+The Vite dev server proxies all `/api/*` requests to the backend automatically.
 
 ### Production
 
 ```bash
-npm run build      # compile TypeScript + bundle Vite frontend
-npm start          # serve everything from http://127.0.0.1:4317
+npm run build    # compiles TypeScript backend + bundles Vite frontend
+npm start        # serves everything from http://127.0.0.1:4317
 ```
 
 Open **http://127.0.0.1:4317** in your browser.
 
 ---
 
-## CLI (preserved)
+## Using the Web UI
+
+1. **Enter a repository path** — absolute path to a local JavaScript/TypeScript repository
+2. **Click "Check Repository"** — validates the path and shows source file coverage
+3. **Enter a natural-language query** — describe the behavior, pattern, or concept you're looking for
+4. **Click "Search"** — runs local embedding inference (first run downloads the model)
+5. **Review ranked results** — each card shows file, line range, similarity score, and a source excerpt
+6. **Click "View Source"** — opens a panel showing the actual current file content with your candidate region highlighted
+
+> **Results are unverified semantic candidates.** Similarity scores are ranking signals, not confidence scores.  
+> A high score does not confirm the code does what your query describes.
+
+---
+
+## CLI
+
+The original command-line interface is preserved:
 
 ```bash
-# Repository validation
+# Build first
+npm run build:backend
+
+# Validate a repository path
 node dist/src/cli.js repo check /path/to/repo
 
-# Repository status
+# Inspect repository source coverage
 node dist/src/cli.js repo status /path/to/repo
 
-# Semantic search
+# Run a semantic search
 node dist/src/cli.js search "your query" --repo /path/to/repo
 ```
 
@@ -72,14 +108,14 @@ node dist/src/cli.js search "your query" --repo /path/to/repo
 
 ## API
 
-All routes are bound to `127.0.0.1` only (localhost).
+The server binds exclusively to `127.0.0.1:4317` (localhost only).
 
 | Method | Route | Description |
 |--------|-------|-------------|
-| GET | `/api/health` | Service health |
-| POST | `/api/repo/status` | Inspect repository source scope |
-| POST | `/api/search` | Semantic search |
-| POST | `/api/source` | Read source lines (read-only, path-safe) |
+| `GET`  | `/api/health` | Service health check |
+| `POST` | `/api/repo/status` | Inspect repository source scope and file coverage |
+| `POST` | `/api/search` | Run semantic search (loads model on first call) |
+| `POST` | `/api/source` | Read source file lines (read-only, path-safe) |
 
 ### POST /api/repo/status
 ```json
@@ -88,52 +124,90 @@ All routes are bound to `127.0.0.1` only (localhost).
 
 ### POST /api/search
 ```json
-{ "query": "your natural language query", "repositoryPath": "/path/to/repo" }
+{ "query": "natural language description", "repositoryPath": "/absolute/path/to/repo" }
 ```
 
 ### POST /api/source
 ```json
-{ "repositoryPath": "/path/to/repo", "filePath": "src/foo.ts", "startLine": 10, "endLine": 50 }
+{
+  "repositoryPath": "/absolute/path/to/repo",
+  "filePath": "src/foo.ts",
+  "startLine": 10,
+  "endLine": 50
+}
 ```
 
 ---
 
-## Limitations
+## Supported Source Languages
 
-- **JavaScript and TypeScript only** — `.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`, `.tsx`, `.mts`, `.cts`
-- **File limits**: max 500 files, 256 KB per file, 5 MB total scope per search
-- **First search is slow**: model download (~25 MB) + embedding all files takes time. Subsequent searches in the same server session reuse the cached model.
-- **No persistent index**: the repository is re-embedded on every search request
-- **Similarity is not verified relevance**: results are unverified semantic candidates; the model may surface irrelevant code
-- **Localhost only**: the server binds to `127.0.0.1` and rejects cross-origin requests from external origins
-- **No authentication, no database, no cloud**
+| Extension | Included |
+|-----------|----------|
+| `.js`, `.jsx`, `.mjs`, `.cjs` | ✅ |
+| `.ts`, `.tsx`, `.mts`, `.cts` | ✅ |
+| Python, Go, Rust, Java, etc.  | ❌ Not currently supported |
 
 ---
 
-## Security
+## Privacy
 
-- API binds exclusively to `127.0.0.1:4317`
-- Source viewer validates all file paths: rejects absolute paths, traversal (`../`), and symlinks
-- JSON request bodies are bounded at 64 KB
-- Browser origin is checked; external origins are rejected
+- The server binds to `127.0.0.1` only — not accessible from other machines
+- No data is sent to any external service
+- The embedding model is downloaded once from Hugging Face and cached locally (`~/.cache/huggingface/`)
+- All inference runs locally in-process
+- Cross-origin requests from non-localhost origins are rejected
+
+---
+
+## Embedding Model
+
+**Model:** `Xenova/all-MiniLM-L6-v2` (quantized `q8`, ~23 MB)  
+**Source:** [Hugging Face Hub](https://huggingface.co/Xenova/all-MiniLM-L6-v2)  
+**Cache:** `~/.cache/huggingface/hub/` (downloaded on first search, reused thereafter)  
+**First search:** slow (download + embed all files). Subsequent searches in the same server session reuse the cached model instance.
+
+---
+
+## Current Limitations
+
+- **JavaScript/TypeScript only** — no support for other languages
+- **No persistent index** — all files are re-embedded on every search request
+- **Scope limits**: max 500 files, 256 KB per file, 5 MB total source per search
+- **First search is slow** — model download + full-repo embedding can take 30–90 seconds on first run
+- **Unverified candidates** — semantic similarity is not functional correctness; results require manual review
+- **Localhost only** — not designed for multi-user or networked deployment
+- **No authentication** — anyone with access to localhost can use the API
 
 ---
 
 ## Project Structure
 
 ```
-src/           Backend TypeScript (CLI + API server + search engine)
-  cli.ts       Command-line interface
-  server.ts    HTTP API server
-  search.ts    Search orchestration
-  retrieval.ts Embedding + cosine similarity
-  source.ts    Source discovery and segmentation
-  status.ts    Repository status inspection
-  repository.ts Repository path validation
-web/           Frontend (React + TypeScript + Vite)
-  src/App.tsx  Main application
-  src/api.ts   API client
-  src/index.css Dark developer stylesheet
-dist/          Compiled backend (after npm run build)
-web/dist/      Bundled frontend (after npm run build)
+src/              Backend TypeScript
+  cli.ts          Command-line interface
+  server.ts       HTTP API + static frontend server (127.0.0.1:4317)
+  search.ts       Search orchestration
+  retrieval.ts    Embedder creation, cosine similarity, candidate retrieval
+  source.ts       Source file discovery and segmentation
+  status.ts       Repository status inspection
+  repository.ts   Repository path validation
+
+web/              Frontend (React + TypeScript + Vite)
+  src/App.tsx     Application UI
+  src/api.ts      Typed API client
+  src/index.css   Design system stylesheet
+
+dist/             Compiled backend (generated by npm run build)
+web/dist/         Bundled frontend (generated by npm run build)
+test/             Acceptance and unit tests (existing, not modified in this run)
 ```
+
+---
+
+## Development Notes
+
+- `npm run dev` requires both backend and frontend to be installed
+- The backend must be built (`npm run build:backend`) before `npm run dev` starts the watch server
+- `concurrently` is used to run backend watch + Vite dev server in parallel
+- Vite proxies `/api/*` to `http://127.0.0.1:4317` during development
+- The production server serves the Vite build from `web/dist/` at `/`

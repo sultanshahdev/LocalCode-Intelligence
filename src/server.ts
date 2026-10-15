@@ -383,7 +383,13 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       return;
     }
 
-    // Serve static frontend
+    // Unknown /api/* routes — return JSON, not the SPA fallback
+    if (url.startsWith('/api/')) {
+      sendError(res, 404, `Unknown API route: ${url}`);
+      return;
+    }
+
+    // Serve static frontend (SPA fallback for unknown non-API paths)
     const served = await serveStatic(req, res);
     if (!served) {
       sendError(res, 404, 'Not found');
