@@ -1,6 +1,6 @@
 import {
   createLocalEmbedder,
-  retrieveCandidates,
+  retrieveHybridCandidates,
   selectDisplayCandidates,
   type Embedder,
   type SearchCandidate,
@@ -50,7 +50,7 @@ export async function searchRepository(
 
   try {
     const embedder = await dependencies.createEmbedder();
-    const retrieved = await retrieveCandidates(query, scope.regions, embedder);
+    const retrieved = await retrieveHybridCandidates(query, scope.regions, embedder);
     const selection = selectDisplayCandidates(retrieved);
     const relevance = assessRelevance(query, selection.candidates);
     return {

@@ -118,6 +118,8 @@ Repository preparation is available through `POST /api/repositories/prepare` wit
 
 Search uses evidence-aware relevance assessment after vector ranking. Similarity remains a ranking signal, never a probability. Clearly unrelated or nonsense queries return `no-relevant-results`; this means no defensible evidence was found, not that a feature is absent.
 
+Search combines local MiniLM semantic ranking with identifier-aware lexical retrieval (camelCase, snake_case, paths, and code tokens) using reciprocal-rank fusion. Exact symbols are therefore not dependent on sentence-embedding similarity alone. Results remain unverified evidence, and source coverage limits can still exclude code outside the configured scope.
+
 JSON API requests must use `Content-Type: application/json` and are limited to 64 KiB. Invalid JSON returns `400`, oversized bodies return `413`, and unsupported content types return `415`, each with a JSON error body. Semantic searches are intentionally serialized because inference is CPU-intensive: one search runs, up to two wait for at most 30 seconds, and further requests receive `503` with `Retry-After: 5`. Health, repository-status, source-view, and static requests are not queued.
 
 The server binds exclusively to `127.0.0.1:4317` (localhost only).

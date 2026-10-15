@@ -145,6 +145,41 @@ export async function retrieveCandidates(
     .slice(0, limit);
 }
 
+/** Lightweight hybrid retrieval: exact identifier/path evidence is fused with
+ * semantic ranks, so MiniLM cannot bury an obvious symbol match. */
+export async function retrieveHybridCandidates(
+  query: string, regions: readonly SourceRegion[], embedder: Embedder, limit = 5,
+): Promise<SearchCandidate[]> {
+  const allSemantic = await retrieveCandidates(query, regions, embedder, regions.length);
+  const semantic = allSemantic.slice(0, 50);
+  const rawByLocation = new Map(allSemantic.map(candidate => [`${candidate.filePath}:${candidate.startLine}:${candidate.endLine}`, candidate]));
+  const lexical = retrieveLexicalCandidates(query, regions, 50).map(candidate => rawByLocation.get(`${candidate.filePath}:${candidate.startLine}:${candidate.endLine}`) ?? candidate);
+  const fused = new Map<string, { candidate: SearchCandidate; score: number }>();
+  const add = (candidate: SearchCandidate, rank: number) => {
+    const key = `${candidate.filePath}:${candidate.startLine}:${candidate.endLine}`;
+    const current = fused.get(key);
+    const score = (current?.score ?? 0) + 1 / (60 + rank);
+    fused.set(key, { candidate, score });
+  };
+  semantic.forEach((candidate, index) => add(candidate, index + 1));
+  lexical.forEach((candidate, index) => add(candidate, index + 1));
+  return [...fused.values()].sort((a, b) => b.score - a.score || b.candidate.score - a.candidate.score).slice(0, limit).map(item => item.candidate);
+}
+
+export function retrieveLexicalCandidates(query: string, regions: readonly SourceRegion[], limit = 50): SearchCandidate[] {
+  const terms = identifierTokens(query);
+  if (terms.length === 0) return [];
+  return regions.map(region => {
+    const tokens = new Set(identifierTokens(`${region.filePath} ${region.text}`));
+    const matches = terms.filter(term => tokens.has(term)).length;
+    return { ...region, score: matches / terms.length };
+  }).filter(candidate => candidate.score > 0).sort((a, b) => b.score - a.score).slice(0, limit);
+}
+
+export function identifierTokens(text: string): string[] {
+  return (text.match(/[A-Z]?[a-z]+|[A-Z]+(?![a-z])|\d+/g) ?? []).map(token => token.toLowerCase());
+}
+
 export function cosineSimilarity(left: readonly number[], right: readonly number[]): number {
   if (left.length === 0 || left.length !== right.length) {
     throw new Error('Embedding vectors must have the same non-zero length.');
