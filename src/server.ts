@@ -20,7 +20,7 @@ import { prepareSourceScope, DEFAULT_SOURCE_LIMITS, listNavigableSourceFiles } f
 import { SearchExecutionController, SearchOverloadedError, SearchQueueAbortedError } from './search-execution.js';
 import { GitHubRepositoryAcquirer, GitHubRepositoryError } from './github-repository.js';
 import { EXACT_SEARCH_LIMITS, searchExactText } from './exact-search.js';
-import { listRepositorySymbols } from './symbols.js';
+import { listRepositorySymbols, findPossibleUsages } from './symbols.js';
 
 const HOST = '127.0.0.1';
 const PORT = Number(process.env['PORT'] ?? 4317);
@@ -468,6 +468,15 @@ async function handleSymbols(req: IncomingMessage, res: ServerResponse): Promise
   try { sendJson(res, 200, { ok: true, ...(await listRepositorySymbols(validation.resolvedPath)) }); }
   catch { sendJson(res, 200, { ok: false, message: 'Symbols could not be read from this repository.' }); }
 }
+async function handleSymbolUsages(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (!requiresJson(req, res)) return; let body: unknown; try { body = await readJsonBody(req); } catch (error) { sendBodyError(res, error); return; }
+  if (typeof body !== 'object' || body === null) { sendError(res, 400, 'Request body must be a JSON object'); return; }
+  const value = body as { repositoryId?: unknown; repositoryPath?: unknown; symbol?: { filePath?: unknown; name?: unknown; kind?: unknown; startLine?: unknown } }; const repositoryPath = resolvePrepared(value);
+  const selected = value.symbol; if (!selected || typeof selected.filePath !== 'string' || typeof selected.name !== 'string' || typeof selected.kind !== 'string' || !Number.isInteger(selected.startLine)) { sendError(res, 400, 'A valid symbol identity is required.'); return; }
+  if (typeof repositoryPath !== 'string' || !repositoryPath.trim()) { sendError(res, 400, 'A prepared repository reference is required.'); return; }
+  const validation = await validateRepositoryDirectory(repositoryPath.trim()); if (!validation.ok) { sendJson(res, 200, { ok: false, message: validation.message }); return; }
+  try { sendJson(res, 200, { ok: true, ...(await findPossibleUsages(validation.resolvedPath, selected as never)) }); } catch (error) { sendJson(res, 200, { ok: false, message: error instanceof Error ? error.message : 'Possible usages could not be read.' }); }
+}
 
 async function handleSource(req: IncomingMessage, res: ServerResponse): Promise<void> {
   if (!requiresJson(req, res)) return;
@@ -649,6 +658,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, performS
       await handleSymbols(req, res);
       return;
     }
+    if (req.method === 'POST' && url === '/api/symbols/usages') { await handleSymbolUsages(req, res); return; }
     if (req.method === 'POST' && url === '/api/source') {
       await handleSource(req, res);
       return;

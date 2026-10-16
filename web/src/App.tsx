@@ -7,6 +7,7 @@ import {
   apiSource,
   apiRepositoryFiles,
   apiSymbols,
+  apiSymbolUsages,
   type SearchCandidate,
   type RepoStatus,
   type SearchResponse,
@@ -14,6 +15,7 @@ import {
   type ExactSearchResponse,
   type SourceResponse,
   type SourceSymbol,
+  type SymbolUsage,
 } from './api';
 
 function FileExplorer({ files, loading, error, onOpen }: { files: string[]; loading: boolean; error: string | null; onOpen: (filePath: string) => void }) {
@@ -33,9 +35,9 @@ function FileExplorer({ files, loading, error, onOpen }: { files: string[]; load
     </details>)}
   </section>;
 }
-function SymbolExplorer({ symbols, loading, error, truncated, onOpen }: { symbols: SourceSymbol[]; loading: boolean; error: string | null; truncated: boolean; onOpen: (symbol: SourceSymbol) => void }) {
+function SymbolExplorer({ symbols, loading, error, truncated, onOpen, onUsages }: { symbols: SourceSymbol[]; loading: boolean; error: string | null; truncated: boolean; onOpen: (symbol: SourceSymbol) => void; onUsages: (symbol: SourceSymbol) => void }) {
   const [filter, setFilter] = useState(''); const visible = symbols.filter(s => `${s.name} ${s.filePath} ${s.kind} ${s.containerName ?? ''}`.toLowerCase().includes(filter.toLowerCase())); const byFile = new Map<string, SourceSymbol[]>(); visible.forEach(s => byFile.set(s.filePath, [...(byFile.get(s.filePath) ?? []), s]));
-  return <section className="symbol-explorer" aria-label="Symbol Explorer"><div className="explorer-head"><strong>Symbols</strong><span>{symbols.length}</span></div><p className="symbol-help">Declarations only — not usages or type-aware Go to Definition.</p><input className="explorer-filter" value={filter} onChange={e => setFilter(e.target.value)} placeholder="Filter declarations…" aria-label="Filter symbols" />{loading && <div className="explorer-state"><Spinner /> Reading declarations…</div>}{error && <div className="explorer-state" role="alert">{error}</div>}{!loading && !error && visible.length === 0 && <div className="explorer-state">No matching declarations.</div>}{truncated && <div className="explorer-state">Symbol results are truncated.</div>}{[...byFile.entries()].map(([file, entries]) => <details key={file} open className="explorer-dir"><summary>{file}</summary>{entries.map(s => <button key={`${s.name}:${s.startLine}:${s.kind}`} className="explorer-file" onClick={() => onOpen(s)}><span className="symbol-kind">{s.kind}</span><span>{s.containerName ? `${s.containerName}.` : ''}{s.name}</span><span className="symbol-line">:{s.startLine}</span></button>)}</details>)}</section>;
+  return <section className="symbol-explorer" aria-label="Symbol Explorer"><div className="explorer-head"><strong>Symbols</strong><span>{symbols.length}</span></div><p className="symbol-help">Declarations below; Find usages shows possible name matches, not type-resolved references.</p><input className="explorer-filter" value={filter} onChange={e => setFilter(e.target.value)} placeholder="Filter declarations…" aria-label="Filter symbols" />{loading && <div className="explorer-state"><Spinner /> Reading declarations…</div>}{error && <div className="explorer-state" role="alert">{error}</div>}{!loading && !error && visible.length === 0 && <div className="explorer-state">No matching declarations.</div>}{truncated && <div className="explorer-state">Symbol results are truncated.</div>}{[...byFile.entries()].map(([file, entries]) => <details key={file} open className="explorer-dir"><summary>{file}</summary>{entries.map(s => <div className="symbol-row" key={`${s.name}:${s.startLine}:${s.kind}`}><button className="explorer-file" onClick={() => onOpen(s)}><span className="symbol-kind">{s.kind}</span><span>{s.containerName ? `${s.containerName}.` : ''}{s.name}</span><span className="symbol-line">:{s.startLine}</span></button><button className="symbol-usages" onClick={() => onUsages(s)}>Find usages</button></div>)}</details>)}</section>;
 }
 
 // ── Escape-key hook ───────────────────────────────────────────────────────────
@@ -358,6 +360,7 @@ export default function App() {
   const [githubSource, setGithubSource] = useState<{ url: string; revision: string } | null>(null);
   const repositoryGeneration = useRef(0);
   const searchGeneration = useRef(0);
+  const usageGeneration = useRef(0);
   const [repoStatus, setRepoStatus] = useState<RepoStatus | null>(null);
   const [repoError, setRepoError] = useState<string | null>(null);
   const [repoLoading, setRepoLoading] = useState(false);
@@ -377,6 +380,12 @@ export default function App() {
   const [navigatorLoading, setNavigatorLoading] = useState(false);
   const [navigatorError, setNavigatorError] = useState<string | null>(null);
   const [symbols, setSymbols] = useState<SourceSymbol[]>([]); const [symbolsLoading, setSymbolsLoading] = useState(false); const [symbolsError, setSymbolsError] = useState<string | null>(null); const [symbolsTruncated, setSymbolsTruncated] = useState(false);
+  const [usageSymbol, setUsageSymbol] = useState<SourceSymbol | null>(null);
+  const [usages, setUsages] = useState<SymbolUsage[]>([]);
+  const [usagesLoading, setUsagesLoading] = useState(false);
+  const [usagesError, setUsagesError] = useState<string | null>(null);
+  const [usagesTruncated, setUsagesTruncated] = useState(false);
+  const [usagesWarnings, setUsagesWarnings] = useState<string[]>([]);
 
   const queryInputRef = useRef<HTMLInputElement>(null);
 
@@ -384,6 +393,14 @@ export default function App() {
     const path = repoPath.trim();
     if (!path) return;
     const current = ++repositoryGeneration.current;
+    // Ignore any in-flight usage response when a repository is prepared or refreshed.
+    usageGeneration.current += 1;
+    setUsageSymbol(null);
+    setUsages([]);
+    setUsagesLoading(false);
+    setUsagesError(null);
+    setUsagesTruncated(false);
+    setUsagesWarnings([]);
     setRepoLoading(true);
     setRepoError(null);
     if (!refresh) {
@@ -436,7 +453,7 @@ export default function App() {
     }
   }, [repoPath, sourceType]);
 
-  const invalidateRepository = () => { repositoryGeneration.current += 1; searchGeneration.current += 1; setRepoLoading(false); setSearchLoading(false); setRepositoryId(undefined); setRepoStatus(null); setResolvedPath(''); setGithubSource(null); setSearchResult(null); setExactResult(null); setSearchError(null); setRepoError(null); setActiveSource(null); setNavigatorFiles([]); setNavigatorError(null); setNavigatorLoading(false); setSymbols([]); setSymbolsError(null); setSymbolsLoading(false); setSymbolsTruncated(false); };
+  const invalidateRepository = () => { repositoryGeneration.current += 1; searchGeneration.current += 1; usageGeneration.current += 1; setUsageSymbol(null); setUsages([]); setUsagesLoading(false); setUsagesError(null); setUsagesTruncated(false); setUsagesWarnings([]); setRepoLoading(false); setSearchLoading(false); setRepositoryId(undefined); setRepoStatus(null); setResolvedPath(''); setGithubSource(null); setSearchResult(null); setExactResult(null); setSearchError(null); setRepoError(null); setActiveSource(null); setNavigatorFiles([]); setNavigatorError(null); setNavigatorLoading(false); setSymbols([]); setSymbolsError(null); setSymbolsLoading(false); setSymbolsTruncated(false); };
   const changeSource = (type: 'local' | 'github') => { invalidateRepository(); setSourceType(type); };
   const invalidateSearch = () => {
     searchGeneration.current += 1;
@@ -542,7 +559,47 @@ export default function App() {
             <RepoStatusDisplay status={repoStatus} resolvedPath={resolvedPath} />
           )}
           {repoStatus && <FileExplorer files={navigatorFiles} loading={navigatorLoading} error={navigatorError} onOpen={(filePath) => setActiveSource({ filePath, startLine: 1, endLine: 1, text: '', score: 0 })} />}
-          {repoStatus && <SymbolExplorer symbols={symbols} loading={symbolsLoading} error={symbolsError} truncated={symbolsTruncated} onOpen={symbol => setActiveSource({ filePath: symbol.filePath, startLine: symbol.startLine, endLine: Math.min(symbol.endLine, symbol.startLine + 20), text: '', score: 0 })} />}
+          {repoStatus && <SymbolExplorer symbols={symbols} loading={symbolsLoading} error={symbolsError} truncated={symbolsTruncated} onOpen={symbol => setActiveSource({ filePath: symbol.filePath, startLine: symbol.startLine, endLine: Math.min(symbol.endLine, symbol.startLine + 20), text: '', score: 0 })} onUsages={symbol => {
+             const current = ++usageGeneration.current;
+             setUsageSymbol(symbol);
+             setUsagesLoading(true);
+             setUsages([]);
+             setUsagesError(null);
+             setUsagesTruncated(false);
+             setUsagesWarnings([]);
+             void apiSymbolUsages(symbol, resolvedPath, repositoryId)
+               .then(response => {
+                 if (current !== usageGeneration.current) return;
+                 if (!response.ok) {
+                   setUsagesError(response.message ?? 'Possible usages could not be found.');
+                   return;
+                 }
+                 setUsages(response.usages ?? []);
+                 setUsagesTruncated(response.truncated === true);
+                 setUsagesWarnings(response.scope?.warnings ?? []);
+               })
+               .catch(() => {
+                 if (current === usageGeneration.current) setUsagesError('Unable to load possible usages.');
+               })
+               .finally(() => {
+                 if (current === usageGeneration.current) setUsagesLoading(false);
+               });
+           }} />}
+          {usageSymbol && <section className="usage-panel" aria-label="Possible usages">
+             <strong>Possible usages of {usageSymbol.name}</strong>
+             <p>AST name matches are not verified references.</p>
+             {usagesLoading && <div className="explorer-state"><Spinner /> Finding possible usages…</div>}
+             {!usagesLoading && usagesError && <div className="explorer-state" role="alert">{usagesError}</div>}
+             {!usagesLoading && !usagesError && usages.length === 0 && <div className="explorer-state">No possible usages found.</div>}
+             {!usagesLoading && !usagesError && usagesTruncated && <div className="explorer-state">Only the first 200 possible usages are shown.</div>}
+             {!usagesLoading && !usagesError && usagesWarnings.map((warning, index) =>
+               <div key={index} className="explorer-state" role="status">{warning}</div>)}
+             {!usagesLoading && !usagesError && usages.map(u =>
+               <button key={`${u.filePath}:${u.line}:${u.column}`} className="explorer-file"
+                 onClick={() => setActiveSource({ filePath: u.filePath, startLine: u.line, endLine: u.line, text: '', score: 0 })}>
+                 {u.filePath}:{u.line} {u.preview}
+               </button>)}
+           </section>}
         </section>
 
         {/* ── Step 2: Search ── */}
