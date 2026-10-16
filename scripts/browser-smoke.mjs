@@ -17,6 +17,7 @@ const LOCAL = '/tmp/localcode-browser-smoke';
 const status = { eligible: true, coverage: 'complete', filesDiscovered: 2, filesProcessed: 2, warnings: [] };
 const localCandidate = { filePath: 'src/auth.ts', startLine: 3, endLine: 4, text: 'export function verifyToken() { return true; }', score: 0.82 };
 const githubCandidate = { filePath: 'src/search.ts', startLine: 12, endLine: 14, text: 'export function searchRepository() { return true; }', score: 0.76 };
+const exactMatch = { filePath: 'src/auth.ts', line: 3, text: 'export const verifyToken = verifyToken();', occurrences: [{ start: 13, end: 24 }, { start: 27, end: 38 }] };
 let server;
 let browser;
 const pageErrors = [];
@@ -71,6 +72,10 @@ async function run() {
       return reply(route, { ok: true, outcome: 'candidates', candidates: [candidate],
         withheldCandidates: 0, scope: { filesProcessed: 2, filesDiscovered: 2, warnings: [] } });
     }
+    if (endpoint === '/api/search/exact') {
+      if (body.query.includes('banana')) return reply(route, { ok: true, matches: [], filesWithMatches: 0, truncated: false, scope: { filesProcessed: 2, filesDiscovered: 2, warnings: [] } });
+      return reply(route, { ok: true, matches: [exactMatch], filesWithMatches: 1, truncated: false, scope: { filesProcessed: 2, filesDiscovered: 2, warnings: [] } });
+    }
     if (endpoint === '/api/repositories/files') {
       return reply(route, { ok: true, files: ['src/auth.ts', 'src/search.ts'], truncated: false });
     }
@@ -100,6 +105,22 @@ async function run() {
   await page.locator('.sv-line--hl').first().waitFor();
   await page.getByRole('button', { name: 'Close source viewer' }).click();
   console.log('PASS local prepare, search and source inspection');
+
+  await page.getByRole('button', { name: 'Exact text' }).click();
+  await page.getByRole('checkbox', { name: 'Whole word' }).check();
+  await page.getByRole('textbox', { name: 'Search query' }).fill('verifyToken');
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
+  await page.locator('.exact-card').waitFor();
+  assert.equal(await page.locator('.exact-highlight').count(), 2);
+  assert(observed.some(item => item.endpoint === '/api/search/exact' && item.body.wholeWord === true));
+  await page.getByRole('button', { name: 'View source for src/auth.ts line 3' }).click();
+  await page.getByRole('dialog', { name: 'Source viewer' }).waitFor();
+  await page.getByRole('button', { name: 'Close source viewer' }).click();
+  await page.getByRole('textbox', { name: 'Search query' }).fill('banana');
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
+  await page.getByText('No exact text matches').waitFor();
+  await page.getByRole('button', { name: 'AI / Semantic' }).click();
+  console.log('PASS exact text mode highlights, opens source, and handles empty results');
 
   await page.getByRole('textbox', { name: 'Search query' }).fill('slow search');
   await page.getByRole('button', { name: 'Search', exact: true }).click();

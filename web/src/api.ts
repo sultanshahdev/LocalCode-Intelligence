@@ -48,6 +48,20 @@ export interface SearchResponse {
   reason?: string;
   message?: string;
 }
+export interface ExactMatch {
+  filePath: string;
+  line: number;
+  text: string;
+  occurrences: Array<{ start: number; end: number }>;
+}
+export interface ExactSearchResponse {
+  ok: boolean;
+  matches?: ExactMatch[];
+  filesWithMatches?: number;
+  truncated?: boolean;
+  scope?: SearchScopeInfo;
+  message?: string;
+}
 
 export interface SourceResponse {
   ok: boolean;
@@ -93,6 +107,9 @@ export async function apiPrepareRepository(type: 'local' | 'github', value: stri
 
 export async function apiSearch(query: string, repositoryPath: string, repositoryId?: string): Promise<SearchResponse> {
   return post<SearchResponse>('/search', repositoryId ? { query, repositoryId } : { query, repositoryPath });
+}
+export async function apiExactSearch(query: string, repositoryPath: string, options: { caseSensitive: boolean; wholeWord: boolean }, repositoryId?: string): Promise<ExactSearchResponse> {
+  return post<ExactSearchResponse>('/search/exact', repositoryId ? { query, repositoryId, ...options } : { query, repositoryPath, ...options });
 }
 
 export async function apiSource(
