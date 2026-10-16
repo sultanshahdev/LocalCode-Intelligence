@@ -4,6 +4,7 @@ import { relative, extname, resolve, isAbsolute, win32 } from 'node:path';
 import * as ts from 'typescript';
 
 import { DEFAULT_SOURCE_LIMITS, discoverSourceFiles, type SourceLimits } from './source.js';
+import type { LanguageRegistry } from './languages/registry.js';
 
 export const SYMBOL_LIMITS = { maxSymbols: 1_000 } as const;
 export type SymbolKind = 'function' | 'class' | 'method' | 'interface' | 'type alias' | 'enum' | 'variable';
@@ -20,8 +21,8 @@ export interface UsageResult { symbol: SourceSymbol; usages: SymbolUsage[]; trun
 export type DefinitionResult = { outcome: 'resolved'; definition: SourceSymbol; method: 'typescript-checker'; warnings: string[] } | { outcome: 'unresolved' | 'ambiguous' | 'unsupported'; message: string; warnings: string[] };
 
 /** Parses a bounded, safe source scope without executing repository code. */
-export async function listRepositorySymbols(repositoryPath: string, limits: SourceLimits = DEFAULT_SOURCE_LIMITS): Promise<SymbolResult> {
-  const files = await discoverSourceFiles(repositoryPath, limits.maxFiles + 1);
+export async function listRepositorySymbols(repositoryPath: string, limits: SourceLimits = DEFAULT_SOURCE_LIMITS, registry?: LanguageRegistry): Promise<SymbolResult> {
+  const files = await discoverSourceFiles(repositoryPath, limits.maxFiles + 1, registry);
   const warnings: string[] = [];
   const filesDiscovered = files.length;
   if (files.length > limits.maxFiles) { warnings.push(`File limit reached (${limits.maxFiles}); some supported files were not processed.`); files.length = limits.maxFiles; }
@@ -105,11 +106,11 @@ async function readBounded(path: string, maxBytes: number): Promise<string> {
 }
 
 /** Finds AST identifier name occurrences only; these are deliberately not type-resolved references. */
-export async function findPossibleUsages(repositoryPath: string, selected: Pick<SourceSymbol, 'filePath' | 'name' | 'kind' | 'startLine'>, limits: SourceLimits = DEFAULT_SOURCE_LIMITS): Promise<UsageResult> {
-  const declarationScan = await listRepositorySymbols(repositoryPath, limits);
+export async function findPossibleUsages(repositoryPath: string, selected: Pick<SourceSymbol, 'filePath' | 'name' | 'kind' | 'startLine'>, limits: SourceLimits = DEFAULT_SOURCE_LIMITS, registry?: LanguageRegistry): Promise<UsageResult> {
+  const declarationScan = await listRepositorySymbols(repositoryPath, limits, registry);
   const symbol = declarationScan.symbols.find(item => item.filePath === selected.filePath && item.name === selected.name && item.kind === selected.kind && item.startLine === selected.startLine);
   if (!symbol) throw new Error('The selected declaration no longer exists in this repository.');
-  const files = await discoverSourceFiles(repositoryPath, limits.maxFiles + 1); const warnings = [...declarationScan.scope.warnings]; const filesDiscovered = files.length;
+  const files = await discoverSourceFiles(repositoryPath, limits.maxFiles + 1, registry); const warnings = [...declarationScan.scope.warnings]; const filesDiscovered = files.length;
   if (files.length > limits.maxFiles) files.length = limits.maxFiles;
   const usages: SymbolUsage[] = []; let filesProcessed = 0; let totalBytes = 0; let truncated = false;
   for (const absolutePath of files) {
@@ -157,9 +158,9 @@ export async function findPossibleUsages(repositoryPath: string, selected: Pick<
 function declarationNamePosition(sf: ts.SourceFile, symbol: SourceSymbol): number { let position = -1; const visit = (node: ts.Node) => { if (position >= 0) return; if (ts.isIdentifier(node) && node.text === symbol.name && sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1 === symbol.startLine) position = node.getStart(sf); else ts.forEachChild(node, visit); }; visit(sf); return position; }
 
 /** Resolves only compiler-proven local bindings from a bounded in-memory source graph. */
-export async function resolveDefinition(repositoryPath: string, request: { filePath: string; line: number; column: number }, limits: SourceLimits = DEFAULT_SOURCE_LIMITS): Promise<DefinitionResult> {
+export async function resolveDefinition(repositoryPath: string, request: { filePath: string; line: number; column: number }, limits: SourceLimits = DEFAULT_SOURCE_LIMITS, registry?: LanguageRegistry): Promise<DefinitionResult> {
   if (!request.filePath || request.filePath.includes('\\') || isAbsolute(request.filePath) || win32.isAbsolute(request.filePath) || request.filePath.split('/').some(p => !p || p === '.' || p === '..') || request.line < 1 || request.column < 1 || !Number.isInteger(request.line) || !Number.isInteger(request.column)) return { outcome: 'unsupported', message: 'A valid repository-relative identifier position is required.', warnings: [] };
-  const files = await discoverSourceFiles(repositoryPath, limits.maxFiles + 1); const warnings: string[] = []; let total = 0; const texts = new Map<string, string>();
+  const files = await discoverSourceFiles(repositoryPath, limits.maxFiles + 1, registry); const warnings: string[] = []; let total = 0; const texts = new Map<string, string>();
   if (files.length > limits.maxFiles) { warnings.push(`File limit reached (${limits.maxFiles}); some supported files were not processed.`); files.length = limits.maxFiles; }
   for (const path of files) { try { const size = (await stat(path)).size; if (size > limits.maxFileBytes || total + size > limits.maxTotalBytes) { warnings.push(`Skipped ${relative(repositoryPath, path)} due to source limits.`); continue; } const text = await readBounded(path, limits.maxFileBytes); const bytes = Buffer.byteLength(text); if (bytes > limits.maxFileBytes || total + bytes > limits.maxTotalBytes) { warnings.push(`Skipped ${relative(repositoryPath, path)} due to source limits after reading.`); continue; } total += bytes; texts.set(resolve(path), text); } catch { warnings.push(`Skipped ${relative(repositoryPath, path)}: unavailable.`); } }
   const root = resolve(repositoryPath); const target = resolve(root, request.filePath); if (relative(root, target).startsWith('..')) return { outcome: 'unsupported', message: 'The selected source file is outside the repository.', warnings }; const text = texts.get(target); if (!text) return { outcome: 'unsupported', message: 'The selected source file is outside the available repository scope.', warnings };
