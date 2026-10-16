@@ -74,6 +74,8 @@ export interface SourceResponse {
   message?: string;
 }
 export interface RepositoryFilesResponse { ok: boolean; files?: string[]; truncated?: boolean; message?: string; }
+export interface SourceSymbol { filePath: string; name: string; kind: string; startLine: number; endLine: number; containerName?: string; exported?: boolean; }
+export interface SymbolsResponse { ok: boolean; symbols?: SourceSymbol[]; truncated?: boolean; scope?: SearchScopeInfo; message?: string; }
 
 // ── API client ────────────────────────────────────────────────────────────────
 
@@ -124,3 +126,4 @@ export async function apiSource(
 export async function apiRepositoryFiles(repositoryPath: string, repositoryId?: string): Promise<RepositoryFilesResponse> {
   return post<RepositoryFilesResponse>('/repositories/files', repositoryId ? { repositoryId } : { repositoryPath });
 }
+export async function apiSymbols(repositoryPath: string, repositoryId?: string): Promise<SymbolsResponse> { return post<SymbolsResponse>('/symbols', repositoryId ? { repositoryId } : { repositoryPath }); }

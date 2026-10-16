@@ -20,6 +20,7 @@ import { prepareSourceScope, DEFAULT_SOURCE_LIMITS, listNavigableSourceFiles } f
 import { SearchExecutionController, SearchOverloadedError, SearchQueueAbortedError } from './search-execution.js';
 import { GitHubRepositoryAcquirer, GitHubRepositoryError } from './github-repository.js';
 import { EXACT_SEARCH_LIMITS, searchExactText } from './exact-search.js';
+import { listRepositorySymbols } from './symbols.js';
 
 const HOST = '127.0.0.1';
 const PORT = Number(process.env['PORT'] ?? 4317);
@@ -455,6 +456,19 @@ async function handleExactSearch(req: IncomingMessage, res: ServerResponse): Pro
   } catch { sendJson(res, 200, { ok: false, message: 'Exact text search could not scan this repository.' }); }
 }
 
+async function handleSymbols(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (!requiresJson(req, res)) return;
+  let body: unknown;
+  try { body = await readJsonBody(req); } catch (error) { sendBodyError(res, error); return; }
+  if (typeof body !== 'object' || body === null) { sendError(res, 400, 'Request body must be a JSON object'); return; }
+  const repositoryPath = resolvePrepared(body as { repositoryId?: unknown; repositoryPath?: unknown });
+  if (typeof repositoryPath !== 'string' || !repositoryPath.trim()) { sendError(res, 400, 'A prepared repository reference is required.'); return; }
+  const validation = await validateRepositoryDirectory(repositoryPath.trim());
+  if (!validation.ok) { sendJson(res, 200, { ok: false, message: validation.message }); return; }
+  try { sendJson(res, 200, { ok: true, ...(await listRepositorySymbols(validation.resolvedPath)) }); }
+  catch { sendJson(res, 200, { ok: false, message: 'Symbols could not be read from this repository.' }); }
+}
+
 async function handleSource(req: IncomingMessage, res: ServerResponse): Promise<void> {
   if (!requiresJson(req, res)) return;
   let body: unknown;
@@ -629,6 +643,10 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, performS
     }
     if (req.method === 'POST' && url === '/api/search/exact') {
       await handleExactSearch(req, res);
+      return;
+    }
+    if (req.method === 'POST' && url === '/api/symbols') {
+      await handleSymbols(req, res);
       return;
     }
     if (req.method === 'POST' && url === '/api/source') {

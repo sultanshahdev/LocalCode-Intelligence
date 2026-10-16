@@ -6,12 +6,14 @@ import {
   apiExactSearch,
   apiSource,
   apiRepositoryFiles,
+  apiSymbols,
   type SearchCandidate,
   type RepoStatus,
   type SearchResponse,
   type ExactMatch,
   type ExactSearchResponse,
   type SourceResponse,
+  type SourceSymbol,
 } from './api';
 
 function FileExplorer({ files, loading, error, onOpen }: { files: string[]; loading: boolean; error: string | null; onOpen: (filePath: string) => void }) {
@@ -30,6 +32,10 @@ function FileExplorer({ files, loading, error, onOpen }: { files: string[]; load
       {entries.map(file => <button key={file} className="explorer-file" onClick={() => onOpen(file)} title={file}><FileIcon /> <span>{file.slice(file.lastIndexOf('/') + 1)}</span></button>)}
     </details>)}
   </section>;
+}
+function SymbolExplorer({ symbols, loading, error, truncated, onOpen }: { symbols: SourceSymbol[]; loading: boolean; error: string | null; truncated: boolean; onOpen: (symbol: SourceSymbol) => void }) {
+  const [filter, setFilter] = useState(''); const visible = symbols.filter(s => `${s.name} ${s.filePath} ${s.kind} ${s.containerName ?? ''}`.toLowerCase().includes(filter.toLowerCase())); const byFile = new Map<string, SourceSymbol[]>(); visible.forEach(s => byFile.set(s.filePath, [...(byFile.get(s.filePath) ?? []), s]));
+  return <section className="symbol-explorer" aria-label="Symbol Explorer"><div className="explorer-head"><strong>Symbols</strong><span>{symbols.length}</span></div><p className="symbol-help">Declarations only — not usages or type-aware Go to Definition.</p><input className="explorer-filter" value={filter} onChange={e => setFilter(e.target.value)} placeholder="Filter declarations…" aria-label="Filter symbols" />{loading && <div className="explorer-state"><Spinner /> Reading declarations…</div>}{error && <div className="explorer-state" role="alert">{error}</div>}{!loading && !error && visible.length === 0 && <div className="explorer-state">No matching declarations.</div>}{truncated && <div className="explorer-state">Symbol results are truncated.</div>}{[...byFile.entries()].map(([file, entries]) => <details key={file} open className="explorer-dir"><summary>{file}</summary>{entries.map(s => <button key={`${s.name}:${s.startLine}:${s.kind}`} className="explorer-file" onClick={() => onOpen(s)}><span className="symbol-kind">{s.kind}</span><span>{s.containerName ? `${s.containerName}.` : ''}{s.name}</span><span className="symbol-line">:{s.startLine}</span></button>)}</details>)}</section>;
 }
 
 // ── Escape-key hook ───────────────────────────────────────────────────────────
@@ -370,6 +376,7 @@ export default function App() {
   const [navigatorFiles, setNavigatorFiles] = useState<string[]>([]);
   const [navigatorLoading, setNavigatorLoading] = useState(false);
   const [navigatorError, setNavigatorError] = useState<string | null>(null);
+  const [symbols, setSymbols] = useState<SourceSymbol[]>([]); const [symbolsLoading, setSymbolsLoading] = useState(false); const [symbolsError, setSymbolsError] = useState<string | null>(null); const [symbolsTruncated, setSymbolsTruncated] = useState(false);
 
   const queryInputRef = useRef<HTMLInputElement>(null);
 
@@ -388,6 +395,7 @@ export default function App() {
       setExactResult(null);
       setActiveSource(null);
       setNavigatorFiles([]); setNavigatorError(null);
+      setSymbols([]); setSymbolsError(null); setSymbolsTruncated(false);
     }
     try {
       const result = await apiPrepareRepository(sourceType, path, refresh);
@@ -412,6 +420,8 @@ export default function App() {
           if (listing.ok) setNavigatorFiles(listing.files ?? []); else setNavigatorError(listing.message ?? 'Files are unavailable.');
         }).catch(() => { if (current === repositoryGeneration.current) setNavigatorError('Files are unavailable.'); })
           .finally(() => { if (current === repositoryGeneration.current) setNavigatorLoading(false); });
+        setSymbolsLoading(true); setSymbolsError(null);
+        void apiSymbols(result.source?.label ?? result.resolvedPath ?? path, result.repositoryId).then(response => { if (current !== repositoryGeneration.current) return; if (response.ok) { setSymbols(response.symbols ?? []); setSymbolsTruncated(response.truncated === true); } else setSymbolsError(response.message ?? 'Symbols are unavailable.'); }).catch(() => { if (current === repositoryGeneration.current) setSymbolsError('Symbols are unavailable.'); }).finally(() => { if (current === repositoryGeneration.current) setSymbolsLoading(false); });
         // Focus search input if eligible
         if (result.status.eligible) {
           setTimeout(() => queryInputRef.current?.focus(), 100);
@@ -426,7 +436,7 @@ export default function App() {
     }
   }, [repoPath, sourceType]);
 
-  const invalidateRepository = () => { repositoryGeneration.current += 1; searchGeneration.current += 1; setRepoLoading(false); setSearchLoading(false); setRepositoryId(undefined); setRepoStatus(null); setResolvedPath(''); setGithubSource(null); setSearchResult(null); setExactResult(null); setSearchError(null); setRepoError(null); setActiveSource(null); setNavigatorFiles([]); setNavigatorError(null); setNavigatorLoading(false); };
+  const invalidateRepository = () => { repositoryGeneration.current += 1; searchGeneration.current += 1; setRepoLoading(false); setSearchLoading(false); setRepositoryId(undefined); setRepoStatus(null); setResolvedPath(''); setGithubSource(null); setSearchResult(null); setExactResult(null); setSearchError(null); setRepoError(null); setActiveSource(null); setNavigatorFiles([]); setNavigatorError(null); setNavigatorLoading(false); setSymbols([]); setSymbolsError(null); setSymbolsLoading(false); setSymbolsTruncated(false); };
   const changeSource = (type: 'local' | 'github') => { invalidateRepository(); setSourceType(type); };
   const invalidateSearch = () => {
     searchGeneration.current += 1;
@@ -532,6 +542,7 @@ export default function App() {
             <RepoStatusDisplay status={repoStatus} resolvedPath={resolvedPath} />
           )}
           {repoStatus && <FileExplorer files={navigatorFiles} loading={navigatorLoading} error={navigatorError} onOpen={(filePath) => setActiveSource({ filePath, startLine: 1, endLine: 1, text: '', score: 0 })} />}
+          {repoStatus && <SymbolExplorer symbols={symbols} loading={symbolsLoading} error={symbolsError} truncated={symbolsTruncated} onOpen={symbol => setActiveSource({ filePath: symbol.filePath, startLine: symbol.startLine, endLine: Math.min(symbol.endLine, symbol.startLine + 20), text: '', score: 0 })} />}
         </section>
 
         {/* ── Step 2: Search ── */}
