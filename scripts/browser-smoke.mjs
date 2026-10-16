@@ -73,6 +73,7 @@ async function run() {
         withheldCandidates: 0, scope: { filesProcessed: 2, filesDiscovered: 2, warnings: [] } });
     }
     if (endpoint === '/api/search/exact') {
+      if (body.query === 'slow exact') await pause(600);
       if (body.query.includes('banana')) return reply(route, { ok: true, matches: [], filesWithMatches: 0, truncated: false, scope: { filesProcessed: 2, filesDiscovered: 2, warnings: [] } });
       return reply(route, { ok: true, matches: [exactMatch], filesWithMatches: 1, truncated: false, scope: { filesProcessed: 2, filesDiscovered: 2, warnings: [] } });
     }
@@ -119,8 +120,22 @@ async function run() {
   await page.getByRole('textbox', { name: 'Search query' }).fill('banana');
   await page.getByRole('button', { name: 'Search', exact: true }).click();
   await page.getByText('No exact text matches').waitFor();
+  // A pending exact-search response must not lock the button or leak into
+  // semantic mode. An option change must cancel the pending UI state too.
+  await page.getByRole('textbox', { name: 'Search query' }).fill('slow exact');
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
   await page.getByRole('button', { name: 'AI / Semantic' }).click();
-  console.log('PASS exact text mode highlights, opens source, and handles empty results');
+  assert.equal(await page.getByRole('button', { name: 'Search', exact: true }).isDisabled(), false);
+  await pause(750);
+  assert.equal(await page.locator('.exact-card').count(), 0);
+  assert.equal(await page.locator('.loading-notice').count(), 0);
+  await page.getByRole('button', { name: 'Exact text' }).click();
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
+  await page.getByRole('checkbox', { name: 'Whole word' }).uncheck();
+  assert.equal(await page.getByRole('button', { name: 'Search', exact: true }).isDisabled(), false);
+  assert.equal(await page.locator('.loading-notice').count(), 0);
+  await page.getByRole('button', { name: 'AI / Semantic' }).click();
+  console.log('PASS exact text mode highlights, pending-mode cancellation, options reset, and empty results');
 
   await page.getByRole('textbox', { name: 'Search query' }).fill('slow search');
   await page.getByRole('button', { name: 'Search', exact: true }).click();
@@ -163,6 +178,15 @@ async function run() {
   const updatedLink = await page.getByRole('link', { name: 'Open on GitHub' }).getAttribute('href');
   assert.equal(updatedLink, GITHUB + '/blob/' + UPDATED_REVISION + '/src/search.ts#L12-L14');
   console.log('PASS successful refresh invalidates old results and updates pinned revision');
+
+  await page.getByRole('button', { name: 'Exact text' }).click();
+  await page.getByRole('textbox', { name: 'Search query' }).fill('verifyToken');
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
+  await page.locator('.exact-card').waitFor();
+  await page.getByRole('button', { name: 'Refresh' }).click();
+  await page.locator('.exact-card').first().waitFor({ state: 'detached' });
+  assert.equal(await page.locator('.exact-card').count(), 0);
+  console.log('PASS successful GitHub refresh discards exact text matches');
 
   await page.getByRole('button', { name: 'Local folder' }).click();
   await page.getByRole('textbox', { name: 'Repository path' }).fill(LOCAL);
