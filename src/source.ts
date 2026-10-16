@@ -11,13 +11,20 @@ export const DEFAULT_SOURCE_LIMITS = {
   overlapLines: 10,
 } as const;
 
-export const SOURCE_EXTENSIONS = new Proxy(new Set<string>(), {
+/**
+ * The set of file extensions supported by the default language registry.
+ * Defers resolution to first runtime access via Proxy to avoid circular-module
+ * initialization issues (source.ts → languages/index.ts → javascript-typescript.ts
+ * → source.ts). Use registry.getSupportedExtensions() for isolated registries.
+ */
+export const SOURCE_EXTENSIONS: Set<string> = new Proxy(new Set<string>(), {
   get(target, prop, receiver) {
     const registryExtensions = getDefaultLanguageRegistry().getSupportedExtensions();
     const value = Reflect.get(registryExtensions, prop, registryExtensions);
     return typeof value === 'function' ? value.bind(registryExtensions) : value;
   },
 });
+
 
 export const IGNORED_DIRECTORIES = new Set([
   '.git', 'node_modules', 'dist', 'build', 'coverage', '.next', '.nuxt', 'out', 'vendor', 'generated', '.cache',

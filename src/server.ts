@@ -17,11 +17,11 @@ import { searchRepository } from './search.js';
 import { CachingEmbedder, createLocalEmbedder, type Embedder } from './retrieval.js';
 import { PersistentCachingEmbedder } from './persistent-embedding-cache.js';
 import { prepareSourceScope, DEFAULT_SOURCE_LIMITS, listNavigableSourceFiles, SOURCE_EXTENSIONS } from './source.js';
-import { defaultLanguageRegistry } from './languages/index.js';
+import { defaultLanguageRegistry, type LanguageAdapter } from './languages/index.js';
 import { SearchExecutionController, SearchOverloadedError, SearchQueueAbortedError } from './search-execution.js';
 import { GitHubRepositoryAcquirer, GitHubRepositoryError } from './github-repository.js';
 import { EXACT_SEARCH_LIMITS, searchExactText } from './exact-search.js';
-import { listRepositorySymbols, findPossibleUsages, resolveDefinition } from './symbols.js';
+import { SYMBOL_LIMITS, type SourceSymbol } from './symbols.js';
 
 const HOST = '127.0.0.1';
 const PORT = Number(process.env['PORT'] ?? 4317);
@@ -455,6 +455,25 @@ async function handleExactSearch(req: IncomingMessage, res: ServerResponse): Pro
   } catch { sendJson(res, 200, { ok: false, message: 'Exact text search could not scan this repository.' }); }
 }
 
+/**
+ * Selects an adapter for a syntactically safe repository-relative path.
+ * Actual file eligibility and no-symlink enforcement remain in the bounded scanner.
+ */
+function resolveStructuralAdapter(
+  filePath: string,
+  capability: 'structural' | 'precise',
+): { adapter: LanguageAdapter } | { error: string } {
+  if (!filePath || typeof filePath !== 'string' || filePath.includes('\\') || filePath.includes('\0') ||
+      isAbsolute(filePath) || win32.isAbsolute(filePath) ||
+      filePath.split('/').some(part => !part || part === '.' || part === '..')) {
+    return { error: 'A valid repository-relative file path is required.' };
+  }
+  const adapter = defaultLanguageRegistry.getByPath(filePath);
+  if (!adapter) return { error: `No language adapter is registered for this file type.` };
+  if (!adapter.capabilities[capability]) return { error: `The ${capability} capability is not supported for files of this type.` };
+  return { adapter };
+}
+
 async function handleSymbols(req: IncomingMessage, res: ServerResponse): Promise<void> {
   if (!requiresJson(req, res)) return;
   let body: unknown;
@@ -464,19 +483,116 @@ async function handleSymbols(req: IncomingMessage, res: ServerResponse): Promise
   if (typeof repositoryPath !== 'string' || !repositoryPath.trim()) { sendError(res, 400, 'A prepared repository reference is required.'); return; }
   const validation = await validateRepositoryDirectory(repositoryPath.trim());
   if (!validation.ok) { sendJson(res, 200, { ok: false, message: validation.message }); return; }
-  try { sendJson(res, 200, { ok: true, ...(await listRepositorySymbols(validation.resolvedPath)) }); }
-  catch { sendJson(res, 200, { ok: false, message: 'Symbols could not be read from this repository.' }); }
+
+  // Gather every adapter that declares and implements structural capabilities.
+  const structuralAdapters = defaultLanguageRegistry.getAllAdapters().filter(
+    (a) => a.capabilities.structural && typeof a.extractSymbols === 'function',
+  );
+
+  if (structuralAdapters.length === 0) {
+    sendJson(res, 200, { ok: true, symbols: [], truncated: false, scope: { filesProcessed: 0, filesDiscovered: 0, warnings: [] } });
+    return;
+  }
+
+  try {
+    // Run all structural adapters and aggregate their results.
+    const results = await Promise.all(
+      structuralAdapters.map((a) => a.extractSymbols!(validation.resolvedPath)),
+    );
+
+    const symbols: SourceSymbol[] = [];
+    let truncated = false;
+    let filesProcessed = 0;
+    let filesDiscovered = 0;
+    const warnings: string[] = [];
+
+    for (const result of results) {
+      filesProcessed += result.scope.filesProcessed;
+      filesDiscovered += (result.scope.filesDiscovered ?? result.scope.filesProcessed);
+      warnings.push(...result.scope.warnings);
+      for (const sym of result.symbols) {
+        if (symbols.length >= SYMBOL_LIMITS.maxSymbols) { truncated = true; break; }
+        symbols.push(sym);
+      }
+      if (result.truncated) truncated = true;
+      if (truncated) break;
+    }
+    if (truncated && !warnings.some((w) => w.includes('Symbol limit'))) {
+      warnings.push(`Symbol limit reached (${SYMBOL_LIMITS.maxSymbols}); refine the repository scope to see additional declarations.`);
+    }
+
+    sendJson(res, 200, { ok: true, symbols, truncated, scope: { filesProcessed, filesDiscovered, warnings } });
+  } catch {
+    sendJson(res, 200, { ok: false, message: 'Symbols could not be read from this repository.' });
+  }
 }
+
 async function handleSymbolUsages(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  if (!requiresJson(req, res)) return; let body: unknown; try { body = await readJsonBody(req); } catch (error) { sendBodyError(res, error); return; }
+  if (!requiresJson(req, res)) return;
+  let body: unknown;
+  try { body = await readJsonBody(req); } catch (error) { sendBodyError(res, error); return; }
   if (typeof body !== 'object' || body === null) { sendError(res, 400, 'Request body must be a JSON object'); return; }
-  const value = body as { repositoryId?: unknown; repositoryPath?: unknown; symbol?: { filePath?: unknown; name?: unknown; kind?: unknown; startLine?: unknown } }; const repositoryPath = resolvePrepared(value);
-  const selected = value.symbol; if (!selected || typeof selected.filePath !== 'string' || typeof selected.name !== 'string' || typeof selected.kind !== 'string' || !Number.isInteger(selected.startLine)) { sendError(res, 400, 'A valid symbol identity is required.'); return; }
+
+  const value = body as { repositoryId?: unknown; repositoryPath?: unknown; symbol?: { filePath?: unknown; name?: unknown; kind?: unknown; startLine?: unknown } };
+  const repositoryPath = resolvePrepared(value);
+  const selected = value.symbol;
+  if (!selected || typeof selected.filePath !== 'string' || typeof selected.name !== 'string' || typeof selected.kind !== 'string' || !Number.isInteger(selected.startLine)) {
+    sendError(res, 400, 'A valid symbol identity is required.'); return;
+  }
   if (typeof repositoryPath !== 'string' || !repositoryPath.trim()) { sendError(res, 400, 'A prepared repository reference is required.'); return; }
-  const validation = await validateRepositoryDirectory(repositoryPath.trim()); if (!validation.ok) { sendJson(res, 200, { ok: false, message: validation.message }); return; }
-  try { sendJson(res, 200, { ok: true, ...(await findPossibleUsages(validation.resolvedPath, selected as never)) }); } catch (error) { sendJson(res, 200, { ok: false, message: error instanceof Error ? error.message : 'Possible usages could not be read.' }); }
+  const validation = await validateRepositoryDirectory(repositoryPath.trim());
+  if (!validation.ok) { sendJson(res, 200, { ok: false, message: validation.message }); return; }
+
+  // Resolve the adapter responsible for the file containing this symbol.
+  const resolved = resolveStructuralAdapter(selected.filePath, 'structural');
+  if ('error' in resolved) {
+    sendJson(res, 200, { ok: false, message: resolved.error }); return;
+  }
+  const { adapter } = resolved;
+  if (typeof adapter.findPossibleUsages !== 'function') {
+    sendJson(res, 200, { ok: false, message: 'Symbol usages are not supported for this source language.' }); return;
+  }
+
+  try {
+    sendJson(res, 200, { ok: true, ...(await adapter.findPossibleUsages(validation.resolvedPath, selected as never)) });
+  } catch (error) {
+    sendJson(res, 200, { ok: false, message: error instanceof Error ? error.message : 'Possible usages could not be read.' });
+  }
 }
-async function handleDefinition(req: IncomingMessage, res: ServerResponse): Promise<void> { if (!requiresJson(req, res)) return; let body: unknown; try { body = await readJsonBody(req); } catch (e) { sendBodyError(res, e); return; } if (!body || typeof body !== 'object') { sendError(res, 400, 'Request body must be a JSON object'); return; } const value = body as { repositoryId?: unknown; repositoryPath?: unknown; filePath?: unknown; line?: unknown; column?: unknown }; const path = resolvePrepared(value); if (typeof path !== 'string' || typeof value.filePath !== 'string' || typeof value.line !== 'number' || typeof value.column !== 'number') { sendError(res, 400, 'repository and identifier position are required.'); return; } const valid = await validateRepositoryDirectory(path); if (!valid.ok) { sendJson(res, 200, { ok: false, message: valid.message }); return; } try { sendJson(res, 200, { ok: true, ...(await resolveDefinition(valid.resolvedPath, { filePath: value.filePath, line: value.line, column: value.column })) }); } catch { sendJson(res, 200, { ok: false, message: 'Definition resolution failed.' }); } }
+
+async function handleDefinition(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (!requiresJson(req, res)) return;
+  let body: unknown;
+  try { body = await readJsonBody(req); } catch (e) { sendBodyError(res, e); return; }
+  if (!body || typeof body !== 'object') { sendError(res, 400, 'Request body must be a JSON object'); return; }
+
+  const value = body as { repositoryId?: unknown; repositoryPath?: unknown; filePath?: unknown; line?: unknown; column?: unknown };
+  const path = resolvePrepared(value);
+  if (typeof path !== 'string' || typeof value.filePath !== 'string' || typeof value.line !== 'number' || typeof value.column !== 'number') {
+    sendError(res, 400, 'repository and identifier position are required.'); return;
+  }
+  const valid = await validateRepositoryDirectory(path);
+  if (!valid.ok) { sendJson(res, 200, { ok: false, message: valid.message }); return; }
+
+  // Resolve the adapter responsible for the file at this position.
+  const resolved = resolveStructuralAdapter(value.filePath, 'precise');
+  if ('error' in resolved) {
+    // Return an explicit unsupported outcome rather than a fabricated result.
+    sendJson(res, 200, { ok: true, outcome: 'unsupported', message: resolved.error, warnings: [] }); return;
+  }
+  const { adapter } = resolved;
+  if (typeof adapter.resolveDefinition !== 'function') {
+    sendJson(res, 200, { ok: true, outcome: 'unsupported', message: 'Definition resolution is not supported for this source language.', warnings: [] }); return;
+  }
+
+  try {
+    sendJson(res, 200, { ok: true, ...(await adapter.resolveDefinition(valid.resolvedPath, { filePath: value.filePath, line: value.line, column: value.column })) });
+  } catch {
+    sendJson(res, 200, { ok: false, message: 'Definition resolution failed.' });
+  }
+}
+
+
 
 async function handleSource(req: IncomingMessage, res: ServerResponse): Promise<void> {
   if (!requiresJson(req, res)) return;

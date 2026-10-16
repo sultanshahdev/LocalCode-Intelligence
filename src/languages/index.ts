@@ -16,7 +16,8 @@ export function createDefaultLanguageRegistry(): LanguageRegistry {
 let sharedRegistry: LanguageRegistry | undefined;
 
 /**
- * Shared default language registry instance for runtime convenience.
+ * Returns the shared default language registry singleton, creating it on first call.
+ * Uses lazy initialization to avoid circular-module initialization hazards.
  */
 export function getDefaultLanguageRegistry(): LanguageRegistry {
   if (!sharedRegistry) {
@@ -25,10 +26,8 @@ export function getDefaultLanguageRegistry(): LanguageRegistry {
   return sharedRegistry;
 }
 
-export const defaultLanguageRegistry = new Proxy({} as LanguageRegistry, {
-  get(target, prop, receiver) {
-    const registry = getDefaultLanguageRegistry();
-    const value = Reflect.get(registry, prop, registry);
-    return typeof value === 'function' ? value.bind(registry) : value;
-  },
-});
+/**
+ * Shared default language registry instance for runtime convenience.
+ * Equivalent to calling getDefaultLanguageRegistry(); no Proxy indirection.
+ */
+export const defaultLanguageRegistry: LanguageRegistry = getDefaultLanguageRegistry();

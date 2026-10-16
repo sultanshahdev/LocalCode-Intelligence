@@ -13,14 +13,28 @@ export class LanguageRegistry {
 
   /**
    * Registers a new language adapter.
-   * Throws if an adapter with the same ID or conflicting extension is already registered.
+   * Throws if an adapter with the same ID, a conflicting extension (including
+   * duplicates within the adapter's own fileExtensions), or an inconsistent
+   * capability declaration is detected.
    */
   register(adapter: LanguageAdapter): void {
     if (this.adaptersById.has(adapter.id)) {
       throw new Error(`Language adapter with id "${adapter.id}" is already registered.`);
     }
 
-    // Verify all extensions are normalized and non-conflicting
+    // Detect duplicate normalized extensions within this adapter's own declaration.
+    const seenInAdapter = new Set<string>();
+    for (const rawExt of adapter.fileExtensions) {
+      const ext = this.normalizeExtension(rawExt);
+      if (seenInAdapter.has(ext)) {
+        throw new Error(
+          `Adapter "${adapter.id}" declares duplicate file extension "${ext}".`,
+        );
+      }
+      seenInAdapter.add(ext);
+    }
+
+    // Verify all extensions are normalized and non-conflicting across adapters.
     for (const rawExt of adapter.fileExtensions) {
       const ext = this.normalizeExtension(rawExt);
       const existing = this.adaptersByExtension.get(ext);
@@ -31,12 +45,34 @@ export class LanguageRegistry {
       }
     }
 
+    // Ensure declared capabilities are backed by actual method implementations.
+    if (adapter.capabilities.structural) {
+      if (typeof adapter.extractSymbols !== 'function') {
+        throw new Error(
+          `Adapter "${adapter.id}" declares structural capability but does not implement extractSymbols.`,
+        );
+      }
+      if (typeof adapter.findPossibleUsages !== 'function') {
+        throw new Error(
+          `Adapter "${adapter.id}" declares structural capability but does not implement findPossibleUsages.`,
+        );
+      }
+    }
+    if (adapter.capabilities.precise) {
+      if (typeof adapter.resolveDefinition !== 'function') {
+        throw new Error(
+          `Adapter "${adapter.id}" declares precise capability but does not implement resolveDefinition.`,
+        );
+      }
+    }
+
     this.adaptersById.set(adapter.id, adapter);
     for (const rawExt of adapter.fileExtensions) {
       const ext = this.normalizeExtension(rawExt);
       this.adaptersByExtension.set(ext, adapter);
     }
   }
+
 
   /**
    * Looks up an adapter by exact language ID.

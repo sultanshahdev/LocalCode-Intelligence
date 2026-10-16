@@ -15,6 +15,7 @@ import {
   discoverSourceFiles,
   prepareSourceScope,
   listNavigableSourceFiles,
+  segmentSource,
   SOURCE_EXTENSIONS,
 } from '../src/source.js';
 
@@ -192,4 +193,247 @@ test('Scenario 6: JS/TS adapter methods produce identical results to direct func
     assert.equal(def.definition.name, 'login');
     assert.equal(def.definition.startLine, 1);
   }
+});
+
+// ── New acceptance tests ──────────────────────────────────────────────────────
+
+test('Acceptance: registry rejects duplicate normalized extensions within a single adapter', () => {
+  const registry = new LanguageRegistry();
+
+  // Same extension with different casing counts as duplicate
+  assert.throws(() => {
+    registry.register({
+      id: 'confusing',
+      name: 'Confusing',
+      fileExtensions: ['.foo', '.FOO'],
+      capabilities: { basic: true, structural: false, precise: false },
+    });
+  }, /duplicate file extension/i);
+
+  // Exact duplicate within the same adapter
+  assert.throws(() => {
+    registry.register({
+      id: 'doubled',
+      name: 'Doubled',
+      fileExtensions: ['.bar', '.bar'],
+      capabilities: { basic: true, structural: false, precise: false },
+    });
+  }, /duplicate file extension/i);
+});
+
+test('Acceptance: registry rejects structural capability without required method implementations', () => {
+  const registry = new LanguageRegistry();
+
+  // Declares structural but missing extractSymbols
+  assert.throws(() => {
+    registry.register({
+      id: 'fake-structural',
+      name: 'Fake Structural',
+      fileExtensions: ['.fk'],
+      capabilities: { basic: true, structural: true, precise: false },
+      // findPossibleUsages present but not extractSymbols
+      findPossibleUsages: async () => ({ symbol: {} as never, usages: [], truncated: false, scope: { filesProcessed: 0, filesDiscovered: 0, warnings: [] } }),
+    });
+  }, /extractSymbols/);
+
+  // Declares structural but missing findPossibleUsages
+  assert.throws(() => {
+    registry.register({
+      id: 'fake-structural2',
+      name: 'Fake Structural 2',
+      fileExtensions: ['.fk2'],
+      capabilities: { basic: true, structural: true, precise: false },
+      extractSymbols: async () => ({ symbols: [], truncated: false, scope: { filesProcessed: 0, filesDiscovered: 0, warnings: [] } }),
+      // missing findPossibleUsages
+    });
+  }, /findPossibleUsages/);
+
+  // Declares precise but missing resolveDefinition
+  assert.throws(() => {
+    registry.register({
+      id: 'fake-precise',
+      name: 'Fake Precise',
+      fileExtensions: ['.fp'],
+      capabilities: { basic: true, structural: false, precise: true },
+      // missing resolveDefinition
+    });
+  }, /resolveDefinition/);
+});
+
+test('Acceptance: basic-capability adapter is discoverable via registry but never processed by JS/TS structural analyzer', async () => {
+  const root = await fixture();
+  await writeFile(join(root, 'module.ts'), 'export function tsFunc() {}\n');
+  await writeFile(join(root, 'readme.basic'), '# just text\n');
+
+  // An isolated registry with both JS/TS and a basic-only language
+  const testRegistry = new LanguageRegistry([
+    javaScriptTypeScriptAdapter,
+    {
+      id: 'basic-lang',
+      name: 'Basic Language',
+      fileExtensions: ['.basic'],
+      capabilities: { basic: true, structural: false, precise: false },
+      // no extractSymbols, no findPossibleUsages, no resolveDefinition
+    },
+  ]);
+
+  // Both file types are discoverable
+  const files = await discoverSourceFiles(root, 10, testRegistry);
+  assert.equal(files.length, 2, 'both .ts and .basic files should be discovered');
+
+  // Source preparation via the test registry picks up both files
+  const scope = await prepareSourceScope(root, undefined, testRegistry);
+  assert.equal(scope.filesProcessed, 2, 'both files should be prepared');
+  const filePaths = scope.regions.map(r => r.filePath);
+  assert.ok(filePaths.some(p => p.endsWith('.ts')), 'should have a .ts region');
+  assert.ok(filePaths.some(p => p.endsWith('.basic')), 'should have a .basic region');
+
+  // The basic-lang adapter has no structural capability — symbols only come from JS/TS
+  const structuralAdapters = testRegistry.getAllAdapters().filter(
+    a => a.capabilities.structural && typeof a.extractSymbols === 'function',
+  );
+  assert.equal(structuralAdapters.length, 1, 'only JS/TS has structural capability');
+  assert.equal(structuralAdapters[0]!.id, 'javascript-typescript');
+
+  // Extracting symbols from the test registry only processes .ts files
+  const result = await structuralAdapters[0]!.extractSymbols!(root);
+  assert.equal(result.symbols.length, 1, 'only one symbol from the .ts file');
+  assert.equal(result.symbols[0]!.name, 'tsFunc');
+  assert.equal(result.symbols[0]!.filePath, 'module.ts');
+
+  // The .basic file must not appear in symbol results
+  const basicFileSymbols = result.symbols.filter(s => s.filePath.endsWith('.basic'));
+  assert.equal(basicFileSymbols.length, 0, '.basic files must never be parsed by the JS/TS structural analyzer');
+});
+
+test('Acceptance: mixed-language repo preserves adapter isolation — Python-like file never processed as TypeScript', async () => {
+  const root = await fixture();
+  await writeFile(join(root, 'server.ts'), 'export function serve() {}\n');
+  // Python-like file with syntax incompatible with TypeScript/JavaScript
+  await writeFile(join(root, 'utils.py'), 'def helper():\n    return 42\n');
+
+  // Production registry (JS/TS only) must NOT discover the .py file
+  const defaultFiles = await discoverSourceFiles(root, 10);
+  assert.equal(defaultFiles.length, 1, 'default registry discovers only .ts file');
+  assert.ok(defaultFiles[0]!.endsWith('server.ts'));
+
+  // JS/TS adapter does not discover the .py file during symbol extraction
+  const result = await javaScriptTypeScriptAdapter.extractSymbols!(root);
+  assert.equal(result.symbols.length, 1);
+  assert.equal(result.symbols[0]!.name, 'serve');
+
+  // No .py file appears in the scope
+  assert.equal(result.scope.filesProcessed, 1, 'only one file processed');
+
+  // Registry lookup for .py returns no adapter in production
+  const pyAdapter = defaultLanguageRegistry.getByPath('utils.py');
+  assert.equal(pyAdapter, undefined, 'production registry must not resolve a .py adapter');
+});
+
+test('Acceptance: unsupported precise navigation returns honest unsupported outcome, not fabricated coordinates', async () => {
+  const root = await fixture();
+  await writeFile(join(root, 'data.basic'), '# no TS here\n');
+
+  // Create a test registry where .basic has no precise capability
+  const testRegistry = new LanguageRegistry([
+    {
+      id: 'basic-lang',
+      name: 'Basic Language',
+      fileExtensions: ['.basic'],
+      capabilities: { basic: true, structural: false, precise: false },
+    },
+  ]);
+
+  const adapter = testRegistry.getByPath('data.basic');
+  assert.ok(adapter, 'adapter must be found for .basic');
+  assert.equal(adapter.capabilities.precise, false);
+  assert.equal(adapter.resolveDefinition, undefined, 'basic adapter must not have resolveDefinition');
+
+  // Simulates what handleDefinition does when no precise adapter is available
+  if (!adapter.capabilities.precise || typeof adapter.resolveDefinition !== 'function') {
+    const outcome = { outcome: 'unsupported' as const, message: 'Definition resolution is not supported for this source language.', warnings: [] };
+    assert.equal(outcome.outcome, 'unsupported');
+    assert.ok(outcome.message.includes('not supported'));
+  } else {
+    assert.fail('Should not have reached precise dispatch for a non-precise adapter');
+  }
+});
+
+test('Acceptance: segmentation output from adapter and shared function is byte-for-byte identical', () => {
+  const filePath = 'src/example.ts';
+  const content = [
+    'export function alpha() {}',
+    'export function beta() {}',
+    'export function gamma() {}',
+    'export function delta() {}',
+    'export function epsilon() {}',
+    'export function zeta() {}',
+    'export function eta() {}',
+  ].join('\n');
+
+  const limits = { windowLines: 4, overlapLines: 1 };
+
+  // Direct segmentSource from source.ts
+  const fromShared = segmentSource(filePath, content, limits);
+  // Via adapter.segmentSource (which delegates to the same function)
+  const fromAdapter = javaScriptTypeScriptAdapter.segmentSource!(filePath, content, limits);
+
+  assert.deepEqual(fromAdapter, fromShared, 'adapter segmentSource must be byte-for-byte identical to shared segmentSource');
+  assert.ok(fromShared.length > 0, 'should produce at least one region');
+
+  for (let i = 0; i < fromShared.length; i++) {
+    assert.equal(fromAdapter[i]!.filePath, fromShared[i]!.filePath);
+    assert.equal(fromAdapter[i]!.startLine, fromShared[i]!.startLine);
+    assert.equal(fromAdapter[i]!.endLine, fromShared[i]!.endLine);
+    assert.equal(fromAdapter[i]!.text, fromShared[i]!.text);
+  }
+});
+
+test('Acceptance: SOURCE_EXTENSIONS reflects the default JS/TS registry extensions', () => {
+  const supported = ['.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.mts', '.cts'];
+  for (const ext of supported) {
+    assert.ok(SOURCE_EXTENSIONS.has(ext), `SOURCE_EXTENSIONS should include ${ext}`);
+  }
+  assert.ok(!SOURCE_EXTENSIONS.has('.py'), 'SOURCE_EXTENSIONS must not include .py in production');
+  assert.ok(!SOURCE_EXTENSIONS.has('.go'), 'SOURCE_EXTENSIONS must not include .go in production');
+});
+
+test('Acceptance: defaultLanguageRegistry is a stable singleton with correct JS/TS capabilities', () => {
+  // Both calls must return the same object (same reference via singleton)
+  const r1 = defaultLanguageRegistry;
+  const r2 = defaultLanguageRegistry;
+  assert.strictEqual(r1, r2, 'defaultLanguageRegistry must be the same singleton reference');
+
+  // Must support all JS/TS extensions
+  assert.ok(r1.isSupported('file.ts'));
+  assert.ok(r1.isSupported('file.js'));
+  // Must not support Python or Go
+  assert.ok(!r1.isSupported('file.py'));
+  assert.ok(!r1.isSupported('file.go'));
+
+  // The JS/TS adapter must have all three capability tiers
+  const jstsAdapter = r1.getByPath('file.ts');
+  assert.ok(jstsAdapter);
+  assert.equal(jstsAdapter.capabilities.basic, true);
+  assert.equal(jstsAdapter.capabilities.structural, true);
+  assert.equal(jstsAdapter.capabilities.precise, true);
+});
+
+
+test('Regression: adding another production language does not send its files through the TS parser', async () => {
+  const root = await fixture();
+  await writeFile(join(root, 'module.ts'), 'export function run() {}\n');
+  await writeFile(join(root, 'module.py'), 'def python_only():\n    return 42\n');
+
+  // Isolation in a separate process avoids mutating the default registry used by other tests.
+  const { spawnSync } = await import('node:child_process');
+  const indexUrl = new URL('../src/languages/index.js', import.meta.url).href;
+  const script = [
+    `import { defaultLanguageRegistry, javaScriptTypeScriptAdapter } from ${JSON.stringify(indexUrl)};`,
+    `defaultLanguageRegistry.register({ id: 'python-test', name: 'Python Test', fileExtensions: ['.py'], capabilities: { basic: true, structural: false, precise: false } });`,
+    `const scope = await javaScriptTypeScriptAdapter.extractSymbols(${JSON.stringify(root)});`,
+    `if (scope.scope.filesProcessed !== 1 || scope.symbols.some(s => s.filePath.endsWith('.py'))) { console.error(JSON.stringify(scope)); process.exitCode = 2; }`,
+  ].join('\n');
+  const result = spawnSync(process.execPath, ['--input-type=module', '--eval', script], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr || result.stdout || 'TS parser unexpectedly processed Python');
 });

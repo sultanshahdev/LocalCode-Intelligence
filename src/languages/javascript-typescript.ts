@@ -1,5 +1,4 @@
-import type { LanguageAdapter } from './types.js';
-import type { SourceLimits, SourceRegion } from '../source.js';
+import { segmentSource, type SourceLimits, type SourceRegion } from '../source.js';
 import {
   listRepositorySymbols,
   findPossibleUsages,
@@ -9,6 +8,8 @@ import {
   type UsageResult,
   type DefinitionResult,
 } from '../symbols.js';
+import type { LanguageAdapter } from './types.js';
+import { LanguageRegistry } from './registry.js';
 
 export const JAVASCRIPT_TYPESCRIPT_EXTENSIONS = [
   '.js',
@@ -31,31 +32,26 @@ export class JavaScriptTypeScriptAdapter implements LanguageAdapter {
     precise: true,
   } as const;
 
+  // Prevent other registered language extensions from entering the TS parser.
+  private readonly scopedRegistry = new LanguageRegistry([this]);
+
+  /**
+   * Delegates to the shared windowed segmentation in src/source.ts to eliminate duplication.
+   * Chunk boundaries, text, paths, and embedding inputs are byte-for-byte identical.
+   */
   segmentSource(
     filePath: string,
     content: string,
     limits: Pick<SourceLimits, 'windowLines' | 'overlapLines'> = { windowLines: 40, overlapLines: 10 },
   ): SourceRegion[] {
-    const lines = content.split(/\r?\n/);
-    if (lines.at(-1) === '') lines.pop();
-    const stride = limits.windowLines - limits.overlapLines;
-    if (stride <= 0) throw new Error('Source window overlap must be smaller than its size.');
-
-    const regions: SourceRegion[] = [];
-    for (let start = 0; start < lines.length; start += stride) {
-      const selected = lines.slice(start, start + limits.windowLines);
-      if (selected.every((line) => line.trim().length === 0)) continue;
-      regions.push({ filePath, startLine: start + 1, endLine: start + selected.length, text: selected.join('\n') });
-      if (start + limits.windowLines >= lines.length) break;
-    }
-    return regions;
+    return segmentSource(filePath, content, limits);
   }
 
   async extractSymbols(
     repositoryPath: string,
     limits?: SourceLimits,
   ): Promise<SymbolResult> {
-    return listRepositorySymbols(repositoryPath, limits);
+    return listRepositorySymbols(repositoryPath, limits, this.scopedRegistry);
   }
 
   async findPossibleUsages(
@@ -63,7 +59,7 @@ export class JavaScriptTypeScriptAdapter implements LanguageAdapter {
     selected: Pick<SourceSymbol, 'filePath' | 'name' | 'kind' | 'startLine'>,
     limits?: SourceLimits,
   ): Promise<UsageResult> {
-    return findPossibleUsages(repositoryPath, selected, limits);
+    return findPossibleUsages(repositoryPath, selected, limits, this.scopedRegistry);
   }
 
   async resolveDefinition(
@@ -71,7 +67,7 @@ export class JavaScriptTypeScriptAdapter implements LanguageAdapter {
     request: { filePath: string; line: number; column: number },
     limits?: SourceLimits,
   ): Promise<DefinitionResult> {
-    return resolveDefinition(repositoryPath, request, limits);
+    return resolveDefinition(repositoryPath, request, limits, this.scopedRegistry);
   }
 }
 
