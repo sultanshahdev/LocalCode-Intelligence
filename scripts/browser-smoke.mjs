@@ -18,6 +18,7 @@ const status = { eligible: true, coverage: 'complete', filesDiscovered: 2, files
 const localCandidate = { filePath: 'src/auth.ts', startLine: 3, endLine: 4, text: 'export function verifyToken() { return true; }', score: 0.82 };
 const githubCandidate = { filePath: 'src/search.ts', startLine: 12, endLine: 14, text: 'export function searchRepository() { return true; }', score: 0.76 };
 const exactMatch = { filePath: 'src/auth.ts', line: 3, text: 'export const verifyToken = verifyToken();', occurrences: [{ start: 13, end: 24 }, { start: 27, end: 38 }] };
+const symbols = [{ filePath: 'src/auth.ts', name: 'verifyToken', kind: 'function', startLine: 3, endLine: 4 }];
 let server;
 let browser;
 const pageErrors = [];
@@ -80,6 +81,10 @@ async function run() {
     if (endpoint === '/api/repositories/files') {
       return reply(route, { ok: true, files: ['src/auth.ts', 'src/search.ts'], truncated: false });
     }
+    if (endpoint === '/api/symbols') {
+      if (body.repositoryId === 'local-id' && observed.filter(item => item.endpoint === '/api/symbols').length === 1) await pause(600);
+      return reply(route, { ok: true, symbols, truncated: false, scope: { filesProcessed: 2, filesDiscovered: 2, warnings: [] } });
+    }
     if (endpoint === '/api/source') {
       return reply(route, { ok: true, filePath: body.filePath,
         startLine: body.startLine, endLine: body.endLine, totalLines: 30,
@@ -92,6 +97,12 @@ async function run() {
   await page.getByRole('textbox', { name: 'Repository path' }).fill(LOCAL);
   await page.getByRole('button', { name: 'Check Repository' }).click();
   await page.getByText('Ready for search').waitFor();
+  await page.getByRole('textbox', { name: 'Filter symbols' }).fill('verify');
+  await page.getByText('verifyToken').last().waitFor();
+  await page.getByText('verifyToken').last().click();
+  await page.getByRole('dialog', { name: 'Source viewer' }).waitFor();
+  await page.getByRole('button', { name: 'Close source viewer' }).click();
+  console.log('PASS symbol filtering and declaration source navigation');
   await page.getByRole('button', { name: /auth\.ts/ }).click();
   await page.getByRole('dialog', { name: 'Source viewer' }).waitFor();
   await page.getByRole('button', { name: 'Close source viewer' }).click();

@@ -17,6 +17,7 @@ Runs entirely on your machine — no cloud, no telemetry, no authentication, no 
 - Embeds everything locally using `Xenova/all-MiniLM-L6-v2` via Transformers.js (quantized, ~23 MB)
 - Returns ranked candidate code regions with cosine similarity scores and source excerpts
 - Includes instant literal text search for identifiers, TODOs, and messages, with case-sensitive and whole-word options
+- Includes a local Symbol Explorer for actual JS/TS declarations and class/interface members (not usages or type-aware Go to Definition)
 - Provides a polished dark web UI for browsing results and inspecting source context in place
 
 All embeddings and inference run in the same Node.js process that serves the UI.  
@@ -122,6 +123,8 @@ Search uses evidence-aware relevance assessment after vector ranking. Similarity
 
 `POST /api/search/exact` performs literal substring search only—no regex or embedding inference—with `{ "query", "repositoryPath" | "repositoryId", "caseSensitive"?, "wholeWord"? }`. It returns repository-relative file paths, one-based line numbers, bounded line snippets, character spans for highlighting, file/match counts, truncation, and source-coverage warnings. Exact search is capped at 256 query characters and 200 matching lines; it shares the 500-file, 256 KiB-per-file, 5 MiB total source safeguards used by semantic preparation.
 
+`POST /api/symbols` uses the TypeScript compiler parser locally to list bounded declarations for a validated `repositoryPath` or prepared `repositoryId`. It never executes repository code or initializes the embedding model. It covers functions, classes, class/interface methods, interfaces, type aliases, enums, and named arrow/function-expression variables in supported JS/TS and JSX/TSX files.
+
 Search combines local MiniLM semantic ranking with identifier-aware lexical retrieval (camelCase, snake_case, paths, and code tokens) using reciprocal-rank fusion. Exact symbols are therefore not dependent on sentence-embedding similarity alone. Results remain unverified evidence, and source coverage limits can still exclude code outside the configured scope.
 
 JSON API requests must use `Content-Type: application/json` and are limited to 64 KiB. Invalid JSON returns `400`, oversized bodies return `413`, and unsupported content types return `415`, each with a JSON error body. Semantic searches are intentionally serialized because inference is CPU-intensive: one search runs, up to two wait for at most 30 seconds, and further requests receive `503` with `Retry-After: 5`. Health, repository-status, source-view, and static requests are not queued.
@@ -134,6 +137,7 @@ The server binds exclusively to `127.0.0.1:4317` (localhost only).
 | `POST` | `/api/repo/status` | Inspect repository source scope and file coverage |
 | `POST` | `/api/search` | Run semantic search (loads model on first call) |
 | `POST` | `/api/search/exact` | Run instant literal text search (never loads model) |
+| `POST` | `/api/symbols` | List parsed source declarations (never loads model) |
 | `POST` | `/api/repositories/files` | List up to 500 safe, repository-relative source paths for navigation |
 | `POST` | `/api/source` | Read source file lines (read-only, path-safe) |
 
