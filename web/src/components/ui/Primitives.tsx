@@ -1,36 +1,8 @@
 import React from 'react';
+import { CodeBusterMark } from '../../brand/CodeBusterMark';
 
 export function LocalCodeLogo({ size = 24, className = '' }: { size?: number; className?: string }) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 32 32"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-      className={className}
-      aria-hidden="true"
-    >
-      <rect width="32" height="32" rx="8" fill="#13141D" />
-      <rect x="0.5" y="0.5" width="31" height="31" rx="7.5" stroke="#262438" />
-      {/* Sleek brackets and node dot */}
-      <path
-        d="M11 11L7 16L11 21"
-        stroke="#C59EFF"
-        strokeWidth="2.2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M21 11L25 16L21 21"
-        stroke="#C59EFF"
-        strokeWidth="2.2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <circle cx="16" cy="16" r="2.5" fill="#9147FF" />
-    </svg>
-  );
+  return <span className={className}><CodeBusterMark size={size} title="Code Buster" /></span>;
 }
 
 export function Button({

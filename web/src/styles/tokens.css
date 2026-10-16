@@ -1,20 +1,20 @@
 :root {
-  --color-bg: #000000;
-  --color-surface: #090a11;
-  --color-surface-raised: #13141d;
-  --color-surface-hover: #1c1c28;
-  --color-border: #262438;
-  --color-border-subtle: #1a1926;
+  --color-bg: #090B0D;
+  --color-surface: #0D1113;
+  --color-surface-raised: #121619;
+  --color-surface-hover: #192023;
+  --color-border: #283033;
+  --color-border-subtle: #1a2224;
   
-  --color-purple-primary: #9147ff;
-  --color-purple-hover: #9f63ff;
-  --color-purple-lavender: #c59eff;
-  --color-purple-faint: rgba(145, 71, 255, 0.08);
-  --color-purple-glow: rgba(145, 71, 255, 0.25);
+  --color-purple-primary: #AD9BF7;
+  --color-purple-hover: #C3B5FF;
+  --color-purple-lavender: #AD9BF7;
+  --color-purple-faint: rgba(173, 155, 247, 0.08);
+  --color-purple-glow: rgba(173, 155, 247, 0.18);
   
-  --color-text-primary: #f5f4f7;
-  --color-text-secondary: #c1bec6;
-  --color-text-muted: #898590;
+  --color-text-primary: #F2F3EE;
+  --color-text-secondary: #A8B3B0;
+  --color-text-muted: #75817E;
   
   --color-success: #22c55e;
   --color-warning: #f59e0b;
@@ -26,9 +26,14 @@
   --radius-xl: 24px;
   --radius-full: 9999px;
 
-  --font-display: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
-  --font-ui: 'Inter', system-ui, -apple-system, sans-serif;
-  --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --font-display: 'Bricolage Grotesque', system-ui, sans-serif;
+  --font-ui: 'Geist', system-ui, -apple-system, sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --color-coral: #FF7566;
+  --motion-fast: 150ms;
+  --motion-standard: 260ms;
+  --motion-reveal: 560ms;
+  --ease-out-expressive: cubic-bezier(0.22, 1, 0.36, 1);
 
   --ease-smooth: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);

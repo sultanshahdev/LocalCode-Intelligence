@@ -12,6 +12,7 @@ import {
   Network,
 } from 'lucide-react';
 import { Button } from '../../components/ui/Primitives';
+import { BusterGhost } from '../../brand/BusterGhost';
 
 interface OverviewViewProps {
   repoStatus: RepoStatus | null;
@@ -33,11 +34,12 @@ export function OverviewView({
   if (!repoStatus) {
     return (
       <div className="overview-unprepared-state">
-        <FolderGit2 size={40} className="overview-empty-icon" />
-        <h3 className="overview-title">No repository connected yet</h3>
+        <BusterGhost className="overview-buster" />
+        <h3 className="overview-title">What are we investigating?</h3>
         <p className="overview-subtitle">
-          Use the repository bar above to prepare a local directory path or a public GitHub repository.
+          Start with a public GitHub URL above, or open a local directory when Code Buster is running on your machine.
         </p>
+        <p className="overview-subtitle overview-subtitle--quiet">Repository contents are read locally. Search results remain inspectable source evidence.</p>
       </div>
     );
   }

@@ -132,8 +132,8 @@ async function run() {
   });
 
   await page.goto(BASE_URL, { waitUntil: 'networkidle' });
-  // Verify landing page and click Open Workspace into /app
-  await page.getByRole('button', { name: 'Open Workspace' }).first().click();
+  // Verify Code Buster landing page and open the investigation workspace.
+  await page.getByRole('button', { name: 'Explore a repository' }).first().click();
   await page.waitForURL('**/app');
   await page.getByRole('textbox', { name: 'Repository path' }).fill(LOCAL);
   await page.getByRole('button', { name: 'Check Repository' }).click();
@@ -210,8 +210,8 @@ async function run() {
   await page.locator('.sv-line--hl').first().waitFor();
   await page.getByRole('button', { name: 'Close source viewer' }).click();
   console.log('PASS local prepare, search and source inspection');
-  // Click the workspace navigation tab (not the SearchView mode toggle)
-  await page.locator('.workspace-tab-btn[aria-label="Exact text"]').click();
+  // Exact text is a contextual Investigation mode, not a separate workspace destination.
+  await page.locator('.search-mode-tab[aria-label="Exact text"]').click();
   await page.getByRole('checkbox', { name: 'Whole word' }).check();
   await page.getByRole('textbox', { name: 'Search query' }).fill('verifyToken');
   await page.getByRole('button', { name: 'Search', exact: true }).click();
@@ -234,7 +234,7 @@ async function run() {
   await pause(750);
   assert.equal(await page.locator('.exact-card').count(), 0);
   assert.equal(await page.locator('.loading-notice').count(), 0);
-  await page.locator('.workspace-tab-btn[aria-label="Exact text"]').click();
+  await page.locator('.search-mode-tab[aria-label="Exact text"]').click();
   await page.getByRole('button', { name: 'Search', exact: true }).click();
   await page.getByRole('checkbox', { name: 'Whole word' }).uncheck();
   assert.equal(await page.getByRole('button', { name: 'Search', exact: true }).isDisabled(), false);
@@ -289,7 +289,7 @@ async function run() {
   assert.equal(updatedLink, GITHUB + '/blob/' + UPDATED_REVISION + '/src/search.ts#L12-L14');
   console.log('PASS successful refresh invalidates old results and updates pinned revision');
 
-  await page.locator('.workspace-tab-btn[aria-label="Exact text"]').click();
+  await page.locator('.search-mode-tab[aria-label="Exact text"]').click();
   await page.getByRole('textbox', { name: 'Search query' }).fill('verifyToken');
   await page.getByRole('button', { name: 'Search', exact: true }).click();
   await page.locator('.exact-card').waitFor();
