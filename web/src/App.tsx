@@ -385,6 +385,7 @@ export default function App() {
       setRepoStatus(null);
       setResolvedPath('');
       setSearchResult(null);
+      setExactResult(null);
       setActiveSource(null);
       setNavigatorFiles([]); setNavigatorError(null);
     }
@@ -398,6 +399,7 @@ export default function App() {
           searchGeneration.current += 1;
           setSearchLoading(false);
           setSearchResult(null);
+          setExactResult(null);
           setActiveSource(null);
         }
         setRepoStatus(result.status);
@@ -426,6 +428,13 @@ export default function App() {
 
   const invalidateRepository = () => { repositoryGeneration.current += 1; searchGeneration.current += 1; setRepoLoading(false); setSearchLoading(false); setRepositoryId(undefined); setRepoStatus(null); setResolvedPath(''); setGithubSource(null); setSearchResult(null); setExactResult(null); setSearchError(null); setRepoError(null); setActiveSource(null); setNavigatorFiles([]); setNavigatorError(null); setNavigatorLoading(false); };
   const changeSource = (type: 'local' | 'github') => { invalidateRepository(); setSourceType(type); };
+  const invalidateSearch = () => {
+    searchGeneration.current += 1;
+    setSearchLoading(false);
+    setSearchResult(null);
+    setExactResult(null);
+    setSearchError(null);
+  };
 
   const handleSearch = useCallback(async () => {
     const q = query.trim();
@@ -477,12 +486,12 @@ export default function App() {
           </div>
 
           <div className="search-mode" role="group" aria-label="Search mode">
-            <button className={searchMode === 'semantic' ? 'search-mode__active' : ''} aria-pressed={searchMode === 'semantic'} onClick={() => { searchGeneration.current += 1; setSearchMode('semantic'); setSearchResult(null); setExactResult(null); }}>AI / Semantic</button>
-            <button className={searchMode === 'exact' ? 'search-mode__active' : ''} aria-pressed={searchMode === 'exact'} onClick={() => { searchGeneration.current += 1; setSearchMode('exact'); setSearchResult(null); setExactResult(null); }}>Exact text</button>
+            <button className={searchMode === 'semantic' ? 'search-mode__active' : ''} aria-pressed={searchMode === 'semantic'} onClick={() => { invalidateSearch(); setSearchMode('semantic'); }}>AI / Semantic</button>
+            <button className={searchMode === 'exact' ? 'search-mode__active' : ''} aria-pressed={searchMode === 'exact'} onClick={() => { invalidateSearch(); setSearchMode('exact'); }}>Exact text</button>
           </div>
           {searchMode === 'exact' && <div className="exact-options" aria-label="Exact text options">
-            <label><input type="checkbox" checked={caseSensitive} onChange={e => { searchGeneration.current += 1; setExactResult(null); setCaseSensitive(e.target.checked); }} /> Case sensitive</label>
-            <label><input type="checkbox" checked={wholeWord} onChange={e => { searchGeneration.current += 1; setExactResult(null); setWholeWord(e.target.checked); }} /> Whole word</label>
+            <label><input type="checkbox" checked={caseSensitive} onChange={e => { invalidateSearch(); setCaseSensitive(e.target.checked); }} /> Case sensitive</label>
+            <label><input type="checkbox" checked={wholeWord} onChange={e => { invalidateSearch(); setWholeWord(e.target.checked); }} /> Whole word</label>
           </div>}
           <div className="source-switch" role="group" aria-label="Repository source">
             <button className={sourceType === 'local' ? 'source-switch__active' : ''} onClick={() => changeSource('local')}>Local folder</button>
