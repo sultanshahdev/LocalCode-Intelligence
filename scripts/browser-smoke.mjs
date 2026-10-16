@@ -88,6 +88,41 @@ async function run() {
       if (body.repositoryId === 'local-id' && observed.filter(item => item.endpoint === '/api/symbols').length === 1) await pause(600);
       return reply(route, { ok: true, symbols, truncated: false, scope: { filesProcessed: 2, filesDiscovered: 2, warnings: [] } });
     }
+    if (endpoint === '/api/symbols/usages') {
+      return reply(route, {
+        ok: true,
+        symbol: body.symbol,
+        usages: [
+          { filePath: 'src/consumer.ts', line: 10, column: 5, preview: 'verifyToken()', start: 0, end: 11 },
+          { filePath: 'src/consumer.ts', line: 20, column: 5, preview: 'verifyToken()', start: 0, end: 11 },
+          { filePath: 'src/consumer.ts', line: 30, column: 5, preview: 'verifyToken()', start: 0, end: 11 },
+        ],
+        truncated: false,
+        scope: { filesProcessed: 2, filesDiscovered: 2, warnings: [] },
+      });
+    }
+    if (endpoint === '/api/symbols/definition') {
+      if (body.line === 30) {
+        await pause(600);
+        return reply(route, {
+          ok: true,
+          outcome: 'resolved',
+          definition: { filePath: 'src/auth.ts', name: 'verifyToken', kind: 'function', startLine: 3, endLine: 4 },
+        });
+      }
+      if (body.line === 20) {
+        return reply(route, {
+          ok: true,
+          outcome: 'ambiguous',
+          message: 'The declaration is not uniquely available in the prepared source scope.',
+        });
+      }
+      return reply(route, {
+        ok: true,
+        outcome: 'resolved',
+        definition: { filePath: 'src/auth.ts', name: 'verifyToken', kind: 'function', startLine: 3, endLine: 4 },
+      });
+    }
     if (endpoint === '/api/source') {
       return reply(route, { ok: true, filePath: body.filePath,
         startLine: body.startLine, endLine: body.endLine, totalLines: 30,
@@ -106,6 +141,41 @@ async function run() {
   await page.getByRole('dialog', { name: 'Source viewer' }).waitFor();
   await page.getByRole('button', { name: 'Close source viewer' }).click();
   console.log('PASS symbol filtering and declaration source navigation');
+
+  // Go to Definition workflow: find usages -> go to definition -> source viewer opens
+  await page.getByRole('button', { name: 'Find usages' }).first().click();
+  await page.getByText('Possible usages of verifyToken').waitFor();
+  assert(observed.some(item => item.endpoint === '/api/symbols/usages' && item.body.repositoryId === 'local-id'));
+  const defButtons = page.getByRole('button', { name: 'Go to definition' });
+  await defButtons.first().click();
+  await page.getByRole('dialog', { name: 'Source viewer' }).waitFor();
+  assert(observed.some(item => item.endpoint === '/api/symbols/definition' &&
+    item.body.repositoryId === 'local-id' &&
+    item.body.filePath === 'src/consumer.ts' &&
+    item.body.line === 10));
+  await page.getByRole('button', { name: 'Close source viewer' }).click();
+  console.log('PASS find usages -> go to definition opens source viewer at declaration');
+
+  // Ambiguous/unresolved definition shows explanatory message and does NOT open source viewer
+  await defButtons.nth(1).click();
+  await page.getByText('The declaration is not uniquely available in the prepared source scope.').waitFor();
+  assert.equal(await page.getByRole('dialog', { name: 'Source viewer' }).count(), 0);
+  console.log('PASS ambiguous definition displays explanatory message and avoids navigating');
+
+  // Pending definition response is discarded when repository changes
+  await defButtons.nth(2).click(); // line 30: pauses 600ms
+  // Switch repository before definition responds
+  await page.getByRole('textbox', { name: 'Repository path' }).fill('/tmp/other-repo');
+  await pause(750);
+  assert.equal(await page.getByRole('dialog', { name: 'Source viewer' }).count(), 0);
+  assert.equal(await page.locator('.usage-panel').count(), 0);
+  console.log('PASS pending definition discarded on repository change');
+
+  // Restore repository to continue checks
+  await page.getByRole('textbox', { name: 'Repository path' }).fill(LOCAL);
+  await page.getByRole('button', { name: 'Check Repository' }).click();
+  await page.getByText('Ready for search').waitFor();
+
   // Long declaration spans must not exceed the source-view API's 500-line cap.
   await page.getByRole('textbox', { name: 'Filter symbols' }).fill('BigClass');
   await page.getByText('BigClass').last().click();

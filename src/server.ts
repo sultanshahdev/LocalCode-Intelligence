@@ -20,7 +20,7 @@ import { prepareSourceScope, DEFAULT_SOURCE_LIMITS, listNavigableSourceFiles } f
 import { SearchExecutionController, SearchOverloadedError, SearchQueueAbortedError } from './search-execution.js';
 import { GitHubRepositoryAcquirer, GitHubRepositoryError } from './github-repository.js';
 import { EXACT_SEARCH_LIMITS, searchExactText } from './exact-search.js';
-import { listRepositorySymbols, findPossibleUsages } from './symbols.js';
+import { listRepositorySymbols, findPossibleUsages, resolveDefinition } from './symbols.js';
 
 const HOST = '127.0.0.1';
 const PORT = Number(process.env['PORT'] ?? 4317);
@@ -477,6 +477,7 @@ async function handleSymbolUsages(req: IncomingMessage, res: ServerResponse): Pr
   const validation = await validateRepositoryDirectory(repositoryPath.trim()); if (!validation.ok) { sendJson(res, 200, { ok: false, message: validation.message }); return; }
   try { sendJson(res, 200, { ok: true, ...(await findPossibleUsages(validation.resolvedPath, selected as never)) }); } catch (error) { sendJson(res, 200, { ok: false, message: error instanceof Error ? error.message : 'Possible usages could not be read.' }); }
 }
+async function handleDefinition(req: IncomingMessage, res: ServerResponse): Promise<void> { if (!requiresJson(req, res)) return; let body: unknown; try { body = await readJsonBody(req); } catch (e) { sendBodyError(res, e); return; } if (!body || typeof body !== 'object') { sendError(res, 400, 'Request body must be a JSON object'); return; } const value = body as { repositoryId?: unknown; repositoryPath?: unknown; filePath?: unknown; line?: unknown; column?: unknown }; const path = resolvePrepared(value); if (typeof path !== 'string' || typeof value.filePath !== 'string' || typeof value.line !== 'number' || typeof value.column !== 'number') { sendError(res, 400, 'repository and identifier position are required.'); return; } const valid = await validateRepositoryDirectory(path); if (!valid.ok) { sendJson(res, 200, { ok: false, message: valid.message }); return; } try { sendJson(res, 200, { ok: true, ...(await resolveDefinition(valid.resolvedPath, { filePath: value.filePath, line: value.line, column: value.column })) }); } catch { sendJson(res, 200, { ok: false, message: 'Definition resolution failed.' }); } }
 
 async function handleSource(req: IncomingMessage, res: ServerResponse): Promise<void> {
   if (!requiresJson(req, res)) return;
@@ -659,6 +660,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, performS
       return;
     }
     if (req.method === 'POST' && url === '/api/symbols/usages') { await handleSymbolUsages(req, res); return; }
+    if (req.method === 'POST' && url === '/api/symbols/definition') { await handleDefinition(req, res); return; }
     if (req.method === 'POST' && url === '/api/source') {
       await handleSource(req, res);
       return;

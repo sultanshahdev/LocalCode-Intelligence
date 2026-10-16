@@ -8,6 +8,7 @@ import {
   apiRepositoryFiles,
   apiSymbols,
   apiSymbolUsages,
+  apiSymbolDefinition,
   type SearchCandidate,
   type RepoStatus,
   type SearchResponse,
@@ -386,6 +387,9 @@ export default function App() {
   const [usagesError, setUsagesError] = useState<string | null>(null);
   const [usagesTruncated, setUsagesTruncated] = useState(false);
   const [usagesWarnings, setUsagesWarnings] = useState<string[]>([]);
+  const definitionGeneration = useRef(0);
+  const [definitionLoading, setDefinitionLoading] = useState<string | null>(null);
+  const [definitionMessage, setDefinitionMessage] = useState<string | null>(null);
 
   const queryInputRef = useRef<HTMLInputElement>(null);
 
@@ -395,6 +399,9 @@ export default function App() {
     const current = ++repositoryGeneration.current;
     // Ignore any in-flight usage response when a repository is prepared or refreshed.
     usageGeneration.current += 1;
+    definitionGeneration.current += 1;
+    setDefinitionLoading(null);
+    setDefinitionMessage(null);
     setUsageSymbol(null);
     setUsages([]);
     setUsagesLoading(false);
@@ -453,7 +460,7 @@ export default function App() {
     }
   }, [repoPath, sourceType]);
 
-  const invalidateRepository = () => { repositoryGeneration.current += 1; searchGeneration.current += 1; usageGeneration.current += 1; setUsageSymbol(null); setUsages([]); setUsagesLoading(false); setUsagesError(null); setUsagesTruncated(false); setUsagesWarnings([]); setRepoLoading(false); setSearchLoading(false); setRepositoryId(undefined); setRepoStatus(null); setResolvedPath(''); setGithubSource(null); setSearchResult(null); setExactResult(null); setSearchError(null); setRepoError(null); setActiveSource(null); setNavigatorFiles([]); setNavigatorError(null); setNavigatorLoading(false); setSymbols([]); setSymbolsError(null); setSymbolsLoading(false); setSymbolsTruncated(false); };
+  const invalidateRepository = () => { repositoryGeneration.current += 1; searchGeneration.current += 1; usageGeneration.current += 1; definitionGeneration.current += 1; setDefinitionLoading(null); setDefinitionMessage(null); setUsageSymbol(null); setUsages([]); setUsagesLoading(false); setUsagesError(null); setUsagesTruncated(false); setUsagesWarnings([]); setRepoLoading(false); setSearchLoading(false); setRepositoryId(undefined); setRepoStatus(null); setResolvedPath(''); setGithubSource(null); setSearchResult(null); setExactResult(null); setSearchError(null); setRepoError(null); setActiveSource(null); setNavigatorFiles([]); setNavigatorError(null); setNavigatorLoading(false); setSymbols([]); setSymbolsError(null); setSymbolsLoading(false); setSymbolsTruncated(false); };
   const changeSource = (type: 'local' | 'github') => { invalidateRepository(); setSourceType(type); };
   const invalidateSearch = () => {
     searchGeneration.current += 1;
@@ -561,6 +568,9 @@ export default function App() {
           {repoStatus && <FileExplorer files={navigatorFiles} loading={navigatorLoading} error={navigatorError} onOpen={(filePath) => setActiveSource({ filePath, startLine: 1, endLine: 1, text: '', score: 0 })} />}
           {repoStatus && <SymbolExplorer symbols={symbols} loading={symbolsLoading} error={symbolsError} truncated={symbolsTruncated} onOpen={symbol => setActiveSource({ filePath: symbol.filePath, startLine: symbol.startLine, endLine: Math.min(symbol.endLine, symbol.startLine + 20), text: '', score: 0 })} onUsages={symbol => {
              const current = ++usageGeneration.current;
+             definitionGeneration.current += 1;
+             setDefinitionLoading(null);
+             setDefinitionMessage(null);
              setUsageSymbol(symbol);
              setUsagesLoading(true);
              setUsages([]);
@@ -594,11 +604,11 @@ export default function App() {
              {!usagesLoading && !usagesError && usagesTruncated && <div className="explorer-state">Only the first 200 possible usages are shown.</div>}
              {!usagesLoading && !usagesError && usagesWarnings.map((warning, index) =>
                <div key={index} className="explorer-state" role="status">{warning}</div>)}
-             {!usagesLoading && !usagesError && usages.map(u =>
-               <button key={`${u.filePath}:${u.line}:${u.column}`} className="explorer-file"
-                 onClick={() => setActiveSource({ filePath: u.filePath, startLine: u.line, endLine: u.line, text: '', score: 0 })}>
-                 {u.filePath}:{u.line} {u.preview}
-               </button>)}
+             {!usagesLoading && !usagesError && definitionMessage && <div className="explorer-state" role="status">{definitionMessage}</div>}
+             {!usagesLoading && !usagesError && usages.map(u => <div className="symbol-row" key={`${u.filePath}:${u.line}:${u.column}`}>
+               <button className="explorer-file" onClick={() => setActiveSource({ filePath: u.filePath, startLine: u.line, endLine: u.line, text: '', score: 0 })}>{u.filePath}:{u.line} {u.preview}</button>
+                <button className="symbol-usages" disabled={definitionLoading === `${u.filePath}:${u.line}:${u.column}`} onClick={() => { const id = `${u.filePath}:${u.line}:${u.column}`; const current = ++definitionGeneration.current; setDefinitionLoading(id); setDefinitionMessage(null); void apiSymbolDefinition(u.filePath, u.line, u.column, resolvedPath, repositoryId).then(response => { if (current !== definitionGeneration.current) return; if (response.ok && response.outcome === 'resolved' && response.definition) setActiveSource({ filePath: response.definition.filePath, startLine: response.definition.startLine, endLine: Math.min(response.definition.endLine, response.definition.startLine + 20), text: '', score: 0 }); else setDefinitionMessage(response.message ?? `Definition ${response.outcome ?? 'could not be resolved'}.`); }).catch(() => { if (current === definitionGeneration.current) setDefinitionMessage('Definition lookup failed.'); }).finally(() => { if (current === definitionGeneration.current) setDefinitionLoading(null); }); }}>{definitionLoading === `${u.filePath}:${u.line}:${u.column}` ? 'Resolving…' : 'Go to definition'}</button>
+             </div>)}
            </section>}
         </section>
 

@@ -1,6 +1,6 @@
 import { open, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
-import { relative, extname } from 'node:path';
+import { relative, extname, resolve, isAbsolute, win32 } from 'node:path';
 import * as ts from 'typescript';
 
 import { DEFAULT_SOURCE_LIMITS, discoverSourceFiles, type SourceLimits } from './source.js';
@@ -17,6 +17,7 @@ export interface SymbolResult {
 }
 export interface SymbolUsage { filePath: string; line: number; column: number; preview: string; start: number; end: number; }
 export interface UsageResult { symbol: SourceSymbol; usages: SymbolUsage[]; truncated: boolean; scope: { filesProcessed: number; filesDiscovered: number; warnings: string[] }; }
+export type DefinitionResult = { outcome: 'resolved'; definition: SourceSymbol; method: 'typescript-checker'; warnings: string[] } | { outcome: 'unresolved' | 'ambiguous' | 'unsupported'; message: string; warnings: string[] };
 
 /** Parses a bounded, safe source scope without executing repository code. */
 export async function listRepositorySymbols(repositoryPath: string, limits: SourceLimits = DEFAULT_SOURCE_LIMITS): Promise<SymbolResult> {
@@ -154,3 +155,26 @@ export async function findPossibleUsages(repositoryPath: string, selected: Pick<
   return { symbol, usages, truncated, scope: { filesProcessed, filesDiscovered, warnings } };
 }
 function declarationNamePosition(sf: ts.SourceFile, symbol: SourceSymbol): number { let position = -1; const visit = (node: ts.Node) => { if (position >= 0) return; if (ts.isIdentifier(node) && node.text === symbol.name && sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1 === symbol.startLine) position = node.getStart(sf); else ts.forEachChild(node, visit); }; visit(sf); return position; }
+
+/** Resolves only compiler-proven local bindings from a bounded in-memory source graph. */
+export async function resolveDefinition(repositoryPath: string, request: { filePath: string; line: number; column: number }, limits: SourceLimits = DEFAULT_SOURCE_LIMITS): Promise<DefinitionResult> {
+  if (!request.filePath || request.filePath.includes('\\') || isAbsolute(request.filePath) || win32.isAbsolute(request.filePath) || request.filePath.split('/').some(p => !p || p === '.' || p === '..') || request.line < 1 || request.column < 1 || !Number.isInteger(request.line) || !Number.isInteger(request.column)) return { outcome: 'unsupported', message: 'A valid repository-relative identifier position is required.', warnings: [] };
+  const files = await discoverSourceFiles(repositoryPath, limits.maxFiles + 1); const warnings: string[] = []; let total = 0; const texts = new Map<string, string>();
+  if (files.length > limits.maxFiles) { warnings.push(`File limit reached (${limits.maxFiles}); some supported files were not processed.`); files.length = limits.maxFiles; }
+  for (const path of files) { try { const size = (await stat(path)).size; if (size > limits.maxFileBytes || total + size > limits.maxTotalBytes) { warnings.push(`Skipped ${relative(repositoryPath, path)} due to source limits.`); continue; } const text = await readBounded(path, limits.maxFileBytes); const bytes = Buffer.byteLength(text); if (bytes > limits.maxFileBytes || total + bytes > limits.maxTotalBytes) { warnings.push(`Skipped ${relative(repositoryPath, path)} due to source limits after reading.`); continue; } total += bytes; texts.set(resolve(path), text); } catch { warnings.push(`Skipped ${relative(repositoryPath, path)}: unavailable.`); } }
+  const root = resolve(repositoryPath); const target = resolve(root, request.filePath); if (relative(root, target).startsWith('..')) return { outcome: 'unsupported', message: 'The selected source file is outside the repository.', warnings }; const text = texts.get(target); if (!text) return { outcome: 'unsupported', message: 'The selected source file is outside the available repository scope.', warnings };
+  const options: ts.CompilerOptions = { allowJs: true, checkJs: true, noLib: true, target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext, moduleResolution: ts.ModuleResolutionKind.Node10, jsx: ts.JsxEmit.Preserve };
+  const host: ts.CompilerHost = { fileExists: f => texts.has(resolve(f)), readFile: f => texts.get(resolve(f)), getSourceFile: (f, lang) => { const value = texts.get(resolve(f)); return value === undefined ? undefined : ts.createSourceFile(resolve(f), value, lang, true, scriptKind(f)); }, getDefaultLibFileName: () => '', writeFile: () => undefined, getCurrentDirectory: () => resolve(repositoryPath), getDirectories: () => [], getCanonicalFileName: f => f, useCaseSensitiveFileNames: () => true, getNewLine: () => '\n' };
+  const program = ts.createProgram({ rootNames: [...texts.keys()], options, host }); const sf = program.getSourceFile(target); if (!sf) return { outcome: 'unresolved', message: 'The selected source file is unavailable.', warnings };
+  const lines = text.split(/\r?\n/); if (request.line > lines.length || request.column > (lines[request.line - 1]?.length ?? 0) + 1) return { outcome: 'unsupported', message: 'The selected position is outside the current source file.', warnings };
+  const lineStart = sf.getPositionOfLineAndCharacter(request.line - 1, request.column - 1); let found: ts.Identifier | undefined;
+  const visit = (node: ts.Node): void => { if (found) return; if (ts.isIdentifier(node) && lineStart >= node.getStart(sf) && lineStart < node.getEnd()) found = node; else ts.forEachChild(node, visit); }; visit(sf);
+  if (!found) return { outcome: 'unsupported', message: 'No identifier exists at the selected position.', warnings };
+  const checker = program.getTypeChecker(); let symbol = checker.getSymbolAtLocation(found); if (!symbol) return { outcome: 'unresolved', message: 'No local declaration could be proven for this identifier.', warnings };
+  if (symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
+  const declarations = symbol.getDeclarations()?.filter(d => texts.has(resolve(d.getSourceFile().fileName))) ?? [];
+  if (declarations.length !== 1) return { outcome: declarations.length > 1 ? 'ambiguous' : 'unresolved', message: 'The declaration is not uniquely available in the prepared source scope.', warnings };
+  const declaration = declarations[0]!; const named = (declaration as ts.NamedDeclaration).name; const nameNode: ts.Node = named !== undefined && ts.isIdentifier(named) ? named : declaration; const declarationFile = declaration.getSourceFile(); const start = declarationFile.getLineAndCharacterOfPosition(nameNode.getStart(declarationFile)); const end = declarationFile.getLineAndCharacterOfPosition(declaration.getEnd());
+  const kind: SymbolKind = ts.isClassDeclaration(declaration) ? 'class' : ts.isFunctionDeclaration(declaration) ? 'function' : ts.isVariableDeclaration(declaration) ? 'variable' : ts.isMethodDeclaration(declaration) ? 'method' : 'variable';
+  return { outcome: 'resolved', definition: { filePath: relative(repositoryPath, declarationFile.fileName), name: symbol.getName(), kind, startLine: start.line + 1, endLine: Math.max(start.line + 1, end.line + 1) }, method: 'typescript-checker', warnings };
+}
