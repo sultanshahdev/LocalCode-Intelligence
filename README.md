@@ -134,11 +134,13 @@ The server binds exclusively to `127.0.0.1:4317` (localhost only).
 | Method | Route | Description |
 |--------|-------|-------------|
 | `GET`  | `/api/health` | Service health check |
+| `GET`  | `/api/languages` | Factual registered-language capability manifest; does not load the embedding model |
 | `POST` | `/api/repo/status` | Inspect repository source scope and file coverage |
 | `POST` | `/api/search` | Run semantic search (loads model on first call) |
 | `POST` | `/api/search/exact` | Run instant literal text search (never loads model) |
 | `POST` | `/api/symbols` | List parsed source declarations (never loads model) |
 | `POST` | `/api/repositories/files` | List up to 500 safe, repository-relative source paths for navigation |
+| `POST` | `/api/repository/map` | Return a bounded, metadata-only directory/file hierarchy for a prepared repository |
 | `POST` | `/api/source` | Read source file lines (read-only, path-safe) |
 
 ### POST /api/repo/status

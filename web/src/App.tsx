@@ -6,6 +6,7 @@ import {
   apiExactSearch,
   apiSource,
   apiRepositoryFiles,
+  apiRepositoryMap,
   apiSymbols,
   apiSymbolUsages,
   apiSymbolDefinition,
@@ -17,7 +18,27 @@ import {
   type SourceResponse,
   type SourceSymbol,
   type SymbolUsage,
+  type RepositoryMapNode,
 } from './api';
+
+function RepositoryMap({ nodes, loading, error, onOpen }: { nodes: RepositoryMapNode[]; loading: boolean; error: string | null; onOpen: (file: string) => void }) {
+  const [filter, setFilter] = useState('');
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const visible = nodes.filter(node => node.path === '.' || (!filter || node.path.toLowerCase().includes(filter.toLowerCase()))).filter(node => {
+    for (let parent = node.parentId; parent && parent !== '.'; parent = nodes.find(item => item.id === parent)?.parentId ?? null) if (collapsed.has(parent)) return false;
+    return true;
+  });
+  return <section className="repository-map" aria-label="Repository Map">
+    <div className="explorer-head"><strong>Repository Map</strong><span>{nodes.length} nodes</span></div>
+    <p className="symbol-help">Metadata-only hierarchy. Select a source file to inspect its current contents.</p>
+    <input className="explorer-filter" value={filter} onChange={e => setFilter(e.target.value)} placeholder="Find a file or directory…" aria-label="Find in repository map" />
+    {loading && <div className="explorer-state"><Spinner /> Building map…</div>}
+    {error && <div className="explorer-state" role="alert">{error}</div>}
+    {!loading && !error && <div className="map-canvas">{visible.filter(n => n.path !== '.').map(node => <button key={node.id} className={`map-node map-node--${node.type}`} style={{ marginLeft: `${Math.max(0, node.path.split('/').length - 1) * 18}px` }} onClick={() => node.type === 'file' ? onOpen(node.path) : setCollapsed(previous => { const next = new Set(previous); next.has(node.id) ? next.delete(node.id) : next.add(node.id); return next; })} title={node.path}>
+      <span aria-hidden="true">{node.type === 'directory' ? (collapsed.has(node.id) ? '▸' : '▾') : '•'}</span><span>{node.name}</span>{node.language && <small>{node.language}</small>}
+    </button>)}</div>}
+  </section>;
+}
 
 function FileExplorer({ files, loading, error, onOpen }: { files: string[]; loading: boolean; error: string | null; onOpen: (filePath: string) => void }) {
   const [filter, setFilter] = useState('');
@@ -380,6 +401,7 @@ export default function App() {
   const [navigatorFiles, setNavigatorFiles] = useState<string[]>([]);
   const [navigatorLoading, setNavigatorLoading] = useState(false);
   const [navigatorError, setNavigatorError] = useState<string | null>(null);
+  const [mapNodes, setMapNodes] = useState<RepositoryMapNode[]>([]); const [mapLoading, setMapLoading] = useState(false); const [mapError, setMapError] = useState<string | null>(null);
   const [symbols, setSymbols] = useState<SourceSymbol[]>([]); const [symbolsLoading, setSymbolsLoading] = useState(false); const [symbolsError, setSymbolsError] = useState<string | null>(null); const [symbolsTruncated, setSymbolsTruncated] = useState(false);
   const [usageSymbol, setUsageSymbol] = useState<SourceSymbol | null>(null);
   const [usages, setUsages] = useState<SymbolUsage[]>([]);
@@ -419,6 +441,7 @@ export default function App() {
       setExactResult(null);
       setActiveSource(null);
       setNavigatorFiles([]); setNavigatorError(null);
+      setMapNodes([]); setMapError(null);
       setSymbols([]); setSymbolsError(null); setSymbolsTruncated(false);
     }
     try {
@@ -444,6 +467,8 @@ export default function App() {
           if (listing.ok) setNavigatorFiles(listing.files ?? []); else setNavigatorError(listing.message ?? 'Files are unavailable.');
         }).catch(() => { if (current === repositoryGeneration.current) setNavigatorError('Files are unavailable.'); })
           .finally(() => { if (current === repositoryGeneration.current) setNavigatorLoading(false); });
+        setMapLoading(true); setMapError(null);
+        void apiRepositoryMap(result.source?.label ?? result.resolvedPath ?? path, result.repositoryId).then(map => { if (current !== repositoryGeneration.current) return; if (map.ok) setMapNodes(map.nodes ?? []); else setMapError(map.message ?? 'Repository map is unavailable.'); }).catch(() => { if (current === repositoryGeneration.current) setMapError('Repository map is unavailable.'); }).finally(() => { if (current === repositoryGeneration.current) setMapLoading(false); });
         setSymbolsLoading(true); setSymbolsError(null);
         void apiSymbols(result.source?.label ?? result.resolvedPath ?? path, result.repositoryId).then(response => { if (current !== repositoryGeneration.current) return; if (response.ok) { setSymbols(response.symbols ?? []); setSymbolsTruncated(response.truncated === true); } else setSymbolsError(response.message ?? 'Symbols are unavailable.'); }).catch(() => { if (current === repositoryGeneration.current) setSymbolsError('Symbols are unavailable.'); }).finally(() => { if (current === repositoryGeneration.current) setSymbolsLoading(false); });
         // Focus search input if eligible
@@ -460,7 +485,7 @@ export default function App() {
     }
   }, [repoPath, sourceType]);
 
-  const invalidateRepository = () => { repositoryGeneration.current += 1; searchGeneration.current += 1; usageGeneration.current += 1; definitionGeneration.current += 1; setDefinitionLoading(null); setDefinitionMessage(null); setUsageSymbol(null); setUsages([]); setUsagesLoading(false); setUsagesError(null); setUsagesTruncated(false); setUsagesWarnings([]); setRepoLoading(false); setSearchLoading(false); setRepositoryId(undefined); setRepoStatus(null); setResolvedPath(''); setGithubSource(null); setSearchResult(null); setExactResult(null); setSearchError(null); setRepoError(null); setActiveSource(null); setNavigatorFiles([]); setNavigatorError(null); setNavigatorLoading(false); setSymbols([]); setSymbolsError(null); setSymbolsLoading(false); setSymbolsTruncated(false); };
+  const invalidateRepository = () => { repositoryGeneration.current += 1; searchGeneration.current += 1; usageGeneration.current += 1; definitionGeneration.current += 1; setDefinitionLoading(null); setDefinitionMessage(null); setUsageSymbol(null); setUsages([]); setUsagesLoading(false); setUsagesError(null); setUsagesTruncated(false); setUsagesWarnings([]); setRepoLoading(false); setSearchLoading(false); setRepositoryId(undefined); setRepoStatus(null); setResolvedPath(''); setGithubSource(null); setSearchResult(null); setExactResult(null); setSearchError(null); setRepoError(null); setActiveSource(null); setNavigatorFiles([]); setNavigatorError(null); setNavigatorLoading(false); setMapNodes([]); setMapError(null); setMapLoading(false); setSymbols([]); setSymbolsError(null); setSymbolsLoading(false); setSymbolsTruncated(false); };
   const changeSource = (type: 'local' | 'github') => { invalidateRepository(); setSourceType(type); };
   const invalidateSearch = () => {
     searchGeneration.current += 1;
@@ -566,6 +591,7 @@ export default function App() {
             <RepoStatusDisplay status={repoStatus} resolvedPath={resolvedPath} />
           )}
           {repoStatus && <FileExplorer files={navigatorFiles} loading={navigatorLoading} error={navigatorError} onOpen={(filePath) => setActiveSource({ filePath, startLine: 1, endLine: 1, text: '', score: 0 })} />}
+          {repoStatus && <RepositoryMap nodes={mapNodes} loading={mapLoading} error={mapError} onOpen={(filePath) => setActiveSource({ filePath, startLine: 1, endLine: 30, text: '', score: 0 })} />}
           {repoStatus && <SymbolExplorer symbols={symbols} loading={symbolsLoading} error={symbolsError} truncated={symbolsTruncated} onOpen={symbol => setActiveSource({ filePath: symbol.filePath, startLine: symbol.startLine, endLine: Math.min(symbol.endLine, symbol.startLine + 20), text: '', score: 0 })} onUsages={symbol => {
              const current = ++usageGeneration.current;
              definitionGeneration.current += 1;

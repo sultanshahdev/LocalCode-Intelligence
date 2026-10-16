@@ -22,6 +22,7 @@ import { SearchExecutionController, SearchOverloadedError, SearchQueueAbortedErr
 import { GitHubRepositoryAcquirer, GitHubRepositoryError } from './github-repository.js';
 import { EXACT_SEARCH_LIMITS, searchExactText } from './exact-search.js';
 import { SYMBOL_LIMITS, type SourceSymbol } from './symbols.js';
+import { buildRepositoryMap } from './repository-map.js';
 
 const HOST = '127.0.0.1';
 const PORT = Number(process.env['PORT'] ?? 4317);
@@ -285,6 +286,28 @@ async function safeReadSourceLines(
 // ── Route handlers ────────────────────────────────────────────────────────────
 async function handleHealth(res: ServerResponse): Promise<void> {
   sendJson(res, 200, { ok: true, service: 'localcode-intelligence', version: '0.1.0' });
+}
+
+async function handleLanguages(res: ServerResponse): Promise<void> {
+  // This route is intentionally metadata-only: no model or parser initialization.
+  sendJson(res, 200, { languages: defaultLanguageRegistry.getAllAdapters().map(adapter => ({
+    id: adapter.id, name: adapter.name, extensions: [...adapter.fileExtensions],
+    capabilities: adapter.capabilities,
+    parserAvailable: adapter.capabilities.structural,
+  })) });
+}
+
+async function handleRepositoryMap(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (!requiresJson(req, res)) return;
+  let body: unknown;
+  try { body = await readJsonBody(req); } catch (error) { sendBodyError(res, error); return; }
+  if (!body || typeof body !== 'object') { sendError(res, 400, 'Request body must be a JSON object'); return; }
+  const repositoryPath = resolvePrepared(body as { repositoryId?: unknown; repositoryPath?: unknown });
+  if (typeof repositoryPath !== 'string' || !repositoryPath.trim()) { sendError(res, 400, 'A prepared repository reference is required.'); return; }
+  const validation = await validateRepositoryDirectory(repositoryPath);
+  if (!validation.ok) { sendJson(res, 200, { ok: false, message: validation.message }); return; }
+  try { sendJson(res, 200, { ok: true, ...(await buildRepositoryMap(validation.resolvedPath)) }); }
+  catch { sendJson(res, 200, { ok: false, message: 'Repository map could not be generated.' }); }
 }
 
 async function handleRepoStatus(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -754,6 +777,8 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, performS
       await handleHealth(res);
       return;
     }
+    if (req.method === 'GET' && url === '/api/languages') { await handleLanguages(res); return; }
+    if (req.method === 'POST' && url === '/api/repository/map') { await handleRepositoryMap(req, res); return; }
     if (req.method === 'POST' && url === '/api/repo/status') {
       await handleRepoStatus(req, res);
       return;
