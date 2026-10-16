@@ -16,7 +16,7 @@ import { inspectRepositorySearchStatus } from './status.js';
 import { searchRepository } from './search.js';
 import { CachingEmbedder, createLocalEmbedder, type Embedder } from './retrieval.js';
 import { PersistentCachingEmbedder } from './persistent-embedding-cache.js';
-import { prepareSourceScope, DEFAULT_SOURCE_LIMITS, listNavigableSourceFiles, SOURCE_EXTENSIONS } from './source.js';
+import { prepareSourceScope, prepareRepositorySourceSnapshot, DEFAULT_SOURCE_LIMITS, listNavigableSourceFiles, SOURCE_EXTENSIONS } from './source.js';
 import { defaultLanguageRegistry, type LanguageAdapter } from './languages/index.js';
 import { SearchExecutionController, SearchOverloadedError, SearchQueueAbortedError } from './search-execution.js';
 import { GitHubRepositoryAcquirer, GitHubRepositoryError } from './github-repository.js';
@@ -518,20 +518,16 @@ async function handleSymbols(req: IncomingMessage, res: ServerResponse): Promise
   }
 
   try {
-    // Run all structural adapters and aggregate their results.
-    const results = await Promise.all(
-      structuralAdapters.map((a) => a.extractSymbols!(validation.resolvedPath)),
-    );
+    const snapshot = await prepareRepositorySourceSnapshot(validation.resolvedPath);
 
     const symbols: SourceSymbol[] = [];
     let truncated = false;
-    let filesProcessed = 0;
-    let filesDiscovered = 0;
-    const warnings: string[] = [];
+    const warnings: string[] = [...snapshot.scope.warnings];
 
-    for (const result of results) {
-      filesProcessed += result.scope.filesProcessed;
-      filesDiscovered += (result.scope.filesDiscovered ?? result.scope.filesProcessed);
+    for (const adapter of structuralAdapters) {
+      const result = adapter.extractSymbolsFromSnapshot
+        ? await adapter.extractSymbolsFromSnapshot(snapshot, SYMBOL_LIMITS.maxSymbols - symbols.length)
+        : await adapter.extractSymbols!(validation.resolvedPath);
       warnings.push(...result.scope.warnings);
       for (const sym of result.symbols) {
         if (symbols.length >= SYMBOL_LIMITS.maxSymbols) { truncated = true; break; }
@@ -544,7 +540,7 @@ async function handleSymbols(req: IncomingMessage, res: ServerResponse): Promise
       warnings.push(`Symbol limit reached (${SYMBOL_LIMITS.maxSymbols}); refine the repository scope to see additional declarations.`);
     }
 
-    sendJson(res, 200, { ok: true, symbols, truncated, scope: { filesProcessed, filesDiscovered, warnings } });
+    sendJson(res, 200, { ok: true, symbols, truncated, scope: { filesProcessed: snapshot.scope.filesProcessed, filesDiscovered: snapshot.scope.filesDiscovered, warnings } });
   } catch {
     sendJson(res, 200, { ok: false, message: 'Symbols could not be read from this repository.' });
   }
@@ -577,7 +573,11 @@ async function handleSymbolUsages(req: IncomingMessage, res: ServerResponse): Pr
   }
 
   try {
-    sendJson(res, 200, { ok: true, ...(await adapter.findPossibleUsages(validation.resolvedPath, selected as never)) });
+    const snapshot = await prepareRepositorySourceSnapshot(validation.resolvedPath);
+    const result = adapter.findPossibleUsagesInSnapshot
+      ? await adapter.findPossibleUsagesInSnapshot(snapshot, selected as never)
+      : await adapter.findPossibleUsages(validation.resolvedPath, selected as never);
+    sendJson(res, 200, { ok: true, ...result });
   } catch (error) {
     sendJson(res, 200, { ok: false, message: error instanceof Error ? error.message : 'Possible usages could not be read.' });
   }

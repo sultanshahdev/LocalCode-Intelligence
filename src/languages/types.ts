@@ -1,4 +1,4 @@
-import type { SourceRegion, SourceLimits } from '../source.js';
+import type { SourceRegion, SourceLimits, RepositorySourceSnapshot } from '../source.js';
 import type { SourceSymbol, SymbolResult, UsageResult, DefinitionResult } from '../symbols.js';
 
 export type LanguageId = 'javascript-typescript' | 'python' | 'go' | 'java' | 'rust' | 'c-cpp' | string;
@@ -38,6 +38,7 @@ export interface LanguageAdapter {
     repositoryPath: string,
     limits?: SourceLimits,
   ): Promise<SymbolResult>;
+  extractSymbolsFromSnapshot?(snapshot: RepositorySourceSnapshot, maximumSymbols?: number): Promise<SymbolResult>;
 
   /**
    * Finds possible usages for a selected declaration.
@@ -48,6 +49,7 @@ export interface LanguageAdapter {
     selected: Pick<SourceSymbol, 'filePath' | 'name' | 'kind' | 'startLine'>,
     limits?: SourceLimits,
   ): Promise<UsageResult>;
+  findPossibleUsagesInSnapshot?(snapshot: RepositorySourceSnapshot, selected: Pick<SourceSymbol, 'filePath' | 'name' | 'kind' | 'startLine'>): Promise<UsageResult>;
 
   /**
    * Resolves the definition location for an identifier at a given coordinate.
