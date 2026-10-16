@@ -57,7 +57,7 @@ export function WorkspaceHeader({
   ];
 
   return (
-    <header className="workspace-header-root">
+    <header className="workspace-header-root workspace-command-shell">
       {/* Top Application Bar */}
       <div className="workspace-top-bar">
         <div className="workspace-brand-group">

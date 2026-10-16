@@ -33,7 +33,7 @@ export function OverviewView({
 }: OverviewViewProps) {
   if (!repoStatus) {
     return (
-      <div className="overview-unprepared-state">
+      <div className="overview-unprepared-state workspace-onboarding-card">
         <BusterGhost className="overview-buster" />
         <h3 className="overview-title">What are we investigating?</h3>
         <p className="overview-subtitle">
