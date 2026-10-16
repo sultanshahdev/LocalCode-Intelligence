@@ -542,7 +542,7 @@ export default function App() {
             <RepoStatusDisplay status={repoStatus} resolvedPath={resolvedPath} />
           )}
           {repoStatus && <FileExplorer files={navigatorFiles} loading={navigatorLoading} error={navigatorError} onOpen={(filePath) => setActiveSource({ filePath, startLine: 1, endLine: 1, text: '', score: 0 })} />}
-          {repoStatus && <SymbolExplorer symbols={symbols} loading={symbolsLoading} error={symbolsError} truncated={symbolsTruncated} onOpen={symbol => setActiveSource({ filePath: symbol.filePath, startLine: symbol.startLine, endLine: symbol.endLine, text: '', score: 0 })} />}
+          {repoStatus && <SymbolExplorer symbols={symbols} loading={symbolsLoading} error={symbolsError} truncated={symbolsTruncated} onOpen={symbol => setActiveSource({ filePath: symbol.filePath, startLine: symbol.startLine, endLine: Math.min(symbol.endLine, symbol.startLine + 20), text: '', score: 0 })} />}
         </section>
 
         {/* ── Step 2: Search ── */}
