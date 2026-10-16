@@ -3,11 +3,14 @@ import {
   apiRepoStatus,
   apiPrepareRepository,
   apiSearch,
+  apiExactSearch,
   apiSource,
   apiRepositoryFiles,
   type SearchCandidate,
   type RepoStatus,
   type SearchResponse,
+  type ExactMatch,
+  type ExactSearchResponse,
   type SourceResponse,
 } from './api';
 
@@ -236,6 +239,37 @@ function ResultCard({ candidate, index, onViewSource, githubUrl, revision }: Res
   );
 }
 
+function ExactResultCard({ match, onViewSource, githubUrl, revision }: { match: ExactMatch; onViewSource: (c: SearchCandidate) => void; githubUrl?: string; revision?: string }) {
+  const candidate = { filePath: match.filePath, startLine: match.line, endLine: match.line, text: match.text, score: 0 };
+  const parts: React.ReactNode[] = [];
+  let cursor = 0;
+  match.occurrences.forEach((occurrence, index) => {
+    if (cursor < occurrence.start) parts.push(match.text.slice(cursor, occurrence.start));
+    parts.push(<mark key={index} className="exact-highlight">{match.text.slice(occurrence.start, occurrence.end)}</mark>);
+    cursor = occurrence.end;
+  });
+  if (cursor < match.text.length) parts.push(match.text.slice(cursor));
+  return <article className="card exact-card">
+    <div className="card-header">
+      <div className="card-meta"><div className="card-path"><span className="card-filename">{match.filePath}</span></div><div className="card-location-row"><span className="card-lines">line {match.line}</span></div></div>
+      <div className="card-actions">
+        <button className="btn-view" onClick={() => onViewSource(candidate)} aria-label={`View source for ${match.filePath} line ${match.line}`}>View Source</button>
+        {githubUrl && revision && <a className="btn-view" target="_blank" rel="noreferrer" href={`${githubUrl}/blob/${revision}/${match.filePath.split('/').map(encodeURIComponent).join('/')}#L${match.line}`}>Open on GitHub</a>}
+      </div>
+    </div>
+    <pre className="card-excerpt exact-excerpt"><span className="exact-line-number">{match.line}</span>{parts}</pre>
+  </article>;
+}
+
+function ExactResults({ matches, onViewSource, githubUrl, revision }: { matches: ExactMatch[]; onViewSource: (c: SearchCandidate) => void; githubUrl?: string; revision?: string }) {
+  const byFile = new Map<string, ExactMatch[]>();
+  matches.forEach(match => byFile.set(match.filePath, [...(byFile.get(match.filePath) ?? []), match]));
+  return <>{[...byFile.entries()].map(([filePath, fileMatches]) => <section className="exact-file-group" key={filePath} aria-label={`Matches in ${filePath}`}>
+    <h3>{filePath} <span>{fileMatches.length} match{fileMatches.length === 1 ? '' : 'es'}</span></h3>
+    {fileMatches.map(match => <ExactResultCard key={`${match.filePath}:${match.line}`} match={match} onViewSource={onViewSource} githubUrl={githubUrl} revision={revision} />)}
+  </section>)}</>;
+}
+
 // ── Repo status display ───────────────────────────────────────────────────────
 
 function RepoStatusDisplay({ status, resolvedPath }: { status: RepoStatus; resolvedPath: string }) {
@@ -290,14 +324,14 @@ function StatusRow({ label, value }: { label: string; value: React.ReactNode }) 
 
 // ── Search scope summary ──────────────────────────────────────────────────────
 
-function SearchMeta({ result }: { result: SearchResponse }) {
+function SearchMeta({ result }: { result: SearchResponse | ExactSearchResponse }) {
   if (!result.ok || !result.scope) return null;
   return (
     <div className="search-meta">
       <span>
         Searched <strong>{result.scope.filesProcessed}</strong> file{result.scope.filesProcessed !== 1 ? 's' : ''}
       </span>
-      {(result.withheldCandidates ?? 0) > 0 && (
+      {'withheldCandidates' in result && (result.withheldCandidates ?? 0) > 0 && (
         <span className="meta-dim">
           · {result.withheldCandidates} candidate{result.withheldCandidates !== 1 ? 's' : ''} withheld (non-positive alignment)
         </span>
@@ -325,6 +359,10 @@ export default function App() {
 
   const [query, setQuery] = useState('');
   const [searchResult, setSearchResult] = useState<SearchResponse | null>(null);
+  const [exactResult, setExactResult] = useState<ExactSearchResponse | null>(null);
+  const [searchMode, setSearchMode] = useState<'semantic' | 'exact'>('semantic');
+  const [caseSensitive, setCaseSensitive] = useState(false);
+  const [wholeWord, setWholeWord] = useState(false);
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
 
@@ -347,6 +385,7 @@ export default function App() {
       setRepoStatus(null);
       setResolvedPath('');
       setSearchResult(null);
+      setExactResult(null);
       setActiveSource(null);
       setNavigatorFiles([]); setNavigatorError(null);
     }
@@ -360,6 +399,7 @@ export default function App() {
           searchGeneration.current += 1;
           setSearchLoading(false);
           setSearchResult(null);
+          setExactResult(null);
           setActiveSource(null);
         }
         setRepoStatus(result.status);
@@ -386,8 +426,15 @@ export default function App() {
     }
   }, [repoPath, sourceType]);
 
-  const invalidateRepository = () => { repositoryGeneration.current += 1; searchGeneration.current += 1; setRepoLoading(false); setSearchLoading(false); setRepositoryId(undefined); setRepoStatus(null); setResolvedPath(''); setGithubSource(null); setSearchResult(null); setSearchError(null); setRepoError(null); setActiveSource(null); setNavigatorFiles([]); setNavigatorError(null); setNavigatorLoading(false); };
+  const invalidateRepository = () => { repositoryGeneration.current += 1; searchGeneration.current += 1; setRepoLoading(false); setSearchLoading(false); setRepositoryId(undefined); setRepoStatus(null); setResolvedPath(''); setGithubSource(null); setSearchResult(null); setExactResult(null); setSearchError(null); setRepoError(null); setActiveSource(null); setNavigatorFiles([]); setNavigatorError(null); setNavigatorLoading(false); };
   const changeSource = (type: 'local' | 'github') => { invalidateRepository(); setSourceType(type); };
+  const invalidateSearch = () => {
+    searchGeneration.current += 1;
+    setSearchLoading(false);
+    setSearchResult(null);
+    setExactResult(null);
+    setSearchError(null);
+  };
 
   const handleSearch = useCallback(async () => {
     const q = query.trim();
@@ -395,22 +442,26 @@ export default function App() {
     const current = ++searchGeneration.current;
     setSearchLoading(true);
     setSearchError(null);
-    setSearchResult(null);
+    setSearchResult(null); setExactResult(null);
     setActiveSource(null);
     try {
-      const result = await apiSearch(q, resolvedPath, repositoryId);
+      const result = searchMode === 'semantic'
+        ? await apiSearch(q, resolvedPath, repositoryId)
+        : await apiExactSearch(q, resolvedPath, { caseSensitive, wholeWord }, repositoryId);
       if (current !== searchGeneration.current) return;
-      setSearchResult(result);
+      if (searchMode === 'semantic') setSearchResult(result as SearchResponse); else setExactResult(result as ExactSearchResponse);
       if (!result.ok) setSearchError(result.message ?? 'Search failed');
     } catch (e) {
       if (current === searchGeneration.current) setSearchError(e instanceof Error ? e.message : 'Network error — is the server running?');
     } finally {
       if (current === searchGeneration.current) setSearchLoading(false);
     }
-  }, [query, resolvedPath, repositoryId]);
+  }, [query, resolvedPath, repositoryId, searchMode, caseSensitive, wholeWord]);
 
   const canSearch = !!repoStatus?.eligible && !!resolvedPath;
-  const hasResults = !!(searchResult?.ok && (searchResult.candidates?.length ?? 0) > 0);
+  const hasResults = searchMode === 'semantic'
+    ? !!(searchResult?.ok && (searchResult.candidates?.length ?? 0) > 0)
+    : !!(exactResult?.ok && (exactResult.matches?.length ?? 0) > 0);
 
   return (
     <div className="app">
@@ -421,7 +472,7 @@ export default function App() {
             <span className="brand-mark" aria-hidden="true">{'</>'}</span>
             <span className="brand-name">LocalCode Intelligence</span>
           </div>
-          <span className="brand-sub">local-first semantic code search</span>
+          <span className="brand-sub">local-first code search</span>
         </div>
       </header>
 
@@ -433,6 +484,15 @@ export default function App() {
             <StepBadge n={1} done={!!repoStatus} />
             <span>Repository</span>
           </div>
+
+          <div className="search-mode" role="group" aria-label="Search mode">
+            <button className={searchMode === 'semantic' ? 'search-mode__active' : ''} aria-pressed={searchMode === 'semantic'} onClick={() => { invalidateSearch(); setSearchMode('semantic'); }}>AI / Semantic</button>
+            <button className={searchMode === 'exact' ? 'search-mode__active' : ''} aria-pressed={searchMode === 'exact'} onClick={() => { invalidateSearch(); setSearchMode('exact'); }}>Exact text</button>
+          </div>
+          {searchMode === 'exact' && <div className="exact-options" aria-label="Exact text options">
+            <label><input type="checkbox" checked={caseSensitive} onChange={e => { invalidateSearch(); setCaseSensitive(e.target.checked); }} /> Case sensitive</label>
+            <label><input type="checkbox" checked={wholeWord} onChange={e => { invalidateSearch(); setWholeWord(e.target.checked); }} /> Whole word</label>
+          </div>}
           <div className="source-switch" role="group" aria-label="Repository source">
             <button className={sourceType === 'local' ? 'source-switch__active' : ''} onClick={() => changeSource('local')}>Local folder</button>
             <button className={sourceType === 'github' ? 'source-switch__active' : ''} onClick={() => changeSource('github')}>GitHub URL</button>
@@ -489,7 +549,7 @@ export default function App() {
               type="text"
               placeholder={
                 canSearch
-                  ? 'Describe what you\'re looking for in natural language…'
+                  ? searchMode === 'semantic' ? 'Describe what you\'re looking for in natural language…' : 'Find a literal identifier, string, TODO, or error message…'
                   : 'Select a valid repository above to enable search'
               }
               value={query}
@@ -498,7 +558,7 @@ export default function App() {
                 // evidence for the text currently visible in the search field.
                 searchGeneration.current += 1;
                 setSearchLoading(false);
-                setSearchResult(null);
+                setSearchResult(null); setExactResult(null);
                 setSearchError(null);
                 setActiveSource(null);
                 setQuery(e.target.value);
@@ -521,9 +581,9 @@ export default function App() {
             <div className="loading-notice" role="status" aria-live="polite">
               <Spinner />
               <div>
-                <div>Running local inference…</div>
+                <div>{searchMode === 'semantic' ? 'Running local inference…' : 'Scanning source text locally…'}</div>
                 <div className="loading-sub">
-                  First run downloads the embedding model (~23 MB). Subsequent runs use the cache.
+                  {searchMode === 'semantic' ? 'First run downloads the embedding model (~23 MB). Subsequent runs use the cache.' : 'Exact text search does not load the embedding model.'}
                 </div>
               </div>
             </div>
@@ -536,6 +596,9 @@ export default function App() {
           )}
 
           {searchResult?.ok && <SearchMeta result={searchResult} />}
+          {exactResult?.ok && <SearchMeta result={exactResult} />}
+
+          {exactResult?.ok && <div className="search-meta"><span>Found <strong>{exactResult.matches?.length ?? 0}</strong> matching line{(exactResult.matches?.length ?? 0) !== 1 ? 's' : ''} in <strong>{exactResult.filesWithMatches ?? 0}</strong> file{(exactResult.filesWithMatches ?? 0) !== 1 ? 's' : ''}</span>{exactResult.truncated && <span className="meta-warn"><WarningIcon /> Results truncated</span>}</div>}
 
           {searchResult?.ok && (searchResult.outcome === 'no-supported-candidate' || searchResult.outcome === 'no-relevant-results') && (
             <div className="empty-state">
@@ -545,10 +608,11 @@ export default function App() {
               </div>
             </div>
           )}
+          {exactResult?.ok && (exactResult.matches?.length ?? 0) === 0 && <div className="empty-state"><div className="empty-state-title">No exact text matches</div><div className="empty-state-body">Try a shorter literal string or turn off case-sensitive and whole-word matching.</div></div>}
 
           {hasResults && (
             <div className="results">
-              {searchResult!.candidates!.map((candidate, i) => (
+              {searchMode === 'semantic' && searchResult!.candidates!.map((candidate, i) => (
                 <ResultCard
                   key={`${candidate.filePath}:${candidate.startLine}`}
                   candidate={candidate}
@@ -558,9 +622,10 @@ export default function App() {
                   revision={githubSource?.revision}
                 />
               ))}
-              <p className="results-disclaimer">
+              {searchMode === 'exact' && <ExactResults matches={exactResult!.matches!} onViewSource={setActiveSource} githubUrl={githubSource?.url} revision={githubSource?.revision} />}
+              {searchMode === 'semantic' && <p className="results-disclaimer">
                 Results are unverified semantic candidates. Similarity scores are ranking signals — not confidence or probability estimates.
-              </p>
+              </p>}
             </div>
           )}
         </section>

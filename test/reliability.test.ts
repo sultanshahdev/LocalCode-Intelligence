@@ -143,3 +143,20 @@ test('completed JSON request receives asynchronous semantic-search response', as
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test('exact text API validates input and searches a prepared local repository without semantic inference', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'localcode-exact-api-'));
+  try {
+    await writeFile(join(directory, 'auth.ts'), 'export const verifyToken = () => verifyToken();\n');
+    await withServer(async port => {
+      const invalid = await post(port, JSON.stringify({ repositoryPath: directory, query: 'x'.repeat(257) }), 'application/json', '/api/search/exact');
+      assert.equal(invalid.status, 400);
+      const prepared = JSON.parse((await post(port, JSON.stringify({ source: { type: 'local', value: directory } }), 'application/json', '/api/repositories/prepare')).body);
+      assert.equal(prepared.ok, true);
+      const response = JSON.parse((await post(port, JSON.stringify({ repositoryId: prepared.repositoryId, query: 'verifyToken', wholeWord: true }), 'application/json', '/api/search/exact')).body);
+      assert.equal(response.ok, true);
+      assert.deepEqual(response.matches[0].occurrences, [{ start: 13, end: 24 }, { start: 33, end: 44 }]);
+      assert.equal(response.matches[0].line, 1);
+    });
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});

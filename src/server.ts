@@ -19,6 +19,7 @@ import { PersistentCachingEmbedder } from './persistent-embedding-cache.js';
 import { prepareSourceScope, DEFAULT_SOURCE_LIMITS, listNavigableSourceFiles } from './source.js';
 import { SearchExecutionController, SearchOverloadedError, SearchQueueAbortedError } from './search-execution.js';
 import { GitHubRepositoryAcquirer, GitHubRepositoryError } from './github-repository.js';
+import { EXACT_SEARCH_LIMITS, searchExactText } from './exact-search.js';
 
 const HOST = '127.0.0.1';
 const PORT = Number(process.env['PORT'] ?? 4317);
@@ -434,6 +435,26 @@ async function handleSearch(req: IncomingMessage, res: ServerResponse, performSe
   });
 }
 
+async function handleExactSearch(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (!requiresJson(req, res)) return;
+  let body: unknown;
+  try { body = await readJsonBody(req); } catch (error) { sendBodyError(res, error); return; }
+  if (typeof body !== 'object' || body === null) { sendError(res, 400, 'Request body must be a JSON object'); return; }
+  const { query, caseSensitive, wholeWord } = body as { query?: unknown; caseSensitive?: unknown; wholeWord?: unknown };
+  const repositoryPath = resolvePrepared(body as { repositoryId?: unknown; repositoryPath?: unknown });
+  if (typeof query !== 'string' || !query.trim()) { sendError(res, 400, 'query must be a non-empty string'); return; }
+  if (query.length > EXACT_SEARCH_LIMITS.maxQueryLength) { sendError(res, 400, `query must be at most ${EXACT_SEARCH_LIMITS.maxQueryLength} characters`); return; }
+  if (typeof caseSensitive !== 'undefined' && typeof caseSensitive !== 'boolean') { sendError(res, 400, 'caseSensitive must be a boolean'); return; }
+  if (typeof wholeWord !== 'undefined' && typeof wholeWord !== 'boolean') { sendError(res, 400, 'wholeWord must be a boolean'); return; }
+  if (typeof repositoryPath !== 'string' || !repositoryPath.trim()) { sendError(res, 400, 'A prepared repository reference is required.'); return; }
+  const validation = await validateRepositoryDirectory(repositoryPath.trim());
+  if (!validation.ok) { sendJson(res, 200, { ok: false, message: validation.message }); return; }
+  try {
+    const result = await searchExactText(query, validation.resolvedPath, { caseSensitive: caseSensitive === true, wholeWord: wholeWord === true });
+    sendJson(res, 200, { ok: true, ...result });
+  } catch { sendJson(res, 200, { ok: false, message: 'Exact text search could not scan this repository.' }); }
+}
+
 async function handleSource(req: IncomingMessage, res: ServerResponse): Promise<void> {
   if (!requiresJson(req, res)) return;
   let body: unknown;
@@ -604,6 +625,10 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, performS
     }
     if (req.method === 'POST' && url === '/api/search') {
       await handleSearch(req, res, performSearch);
+      return;
+    }
+    if (req.method === 'POST' && url === '/api/search/exact') {
+      await handleExactSearch(req, res);
       return;
     }
     if (req.method === 'POST' && url === '/api/source') {

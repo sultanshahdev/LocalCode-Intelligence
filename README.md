@@ -1,6 +1,6 @@
 # LocalCode Intelligence
 
-A local-first semantic code search tool for JavaScript and TypeScript repositories.  
+A local-first semantic and exact-text code search tool for JavaScript and TypeScript repositories.
 Runs entirely on your machine — no cloud, no telemetry, no authentication, no persistent index.
 
 ---
@@ -16,6 +16,7 @@ Runs entirely on your machine — no cloud, no telemetry, no authentication, no 
 - Discovers and segments `.js` / `.ts` source files (and variants)
 - Embeds everything locally using `Xenova/all-MiniLM-L6-v2` via Transformers.js (quantized, ~23 MB)
 - Returns ranked candidate code regions with cosine similarity scores and source excerpts
+- Includes instant literal text search for identifiers, TODOs, and messages, with case-sensitive and whole-word options
 - Provides a polished dark web UI for browsing results and inspecting source context in place
 
 All embeddings and inference run in the same Node.js process that serves the UI.  
@@ -76,8 +77,8 @@ Open **http://127.0.0.1:4317** in your browser.
 
 1. **Enter a repository path** — absolute path to a local JavaScript/TypeScript repository
 2. **Click "Check Repository"** — validates the path and shows source file coverage
-3. **Enter a natural-language query** — describe the behavior, pattern, or concept you're looking for
-4. **Click "Search"** — runs local embedding inference (first run downloads the model)
+3. **Choose a search mode** — use **AI / Semantic** for a natural-language behavior or concept, or **Exact text** for a literal identifier, TODO, or message fragment
+4. **Click "Search"** — semantic search runs local embedding inference (first run downloads the model); exact text scans the bounded local source scope immediately and never loads the model
 5. **Review ranked results** — each card shows file, line range, similarity score, and a source excerpt
 6. **Click "View Source"** — opens a panel showing the actual current file content with your candidate region highlighted
 7. **Browse Files** — after preparation, use the collapsible Files navigator to filter supported JS/TS files and open them in the same source viewer
@@ -119,6 +120,8 @@ Repository preparation is available through `POST /api/repositories/prepare` wit
 
 Search uses evidence-aware relevance assessment after vector ranking. Similarity remains a ranking signal, never a probability. Clearly unrelated or nonsense queries return `no-relevant-results`; this means no defensible evidence was found, not that a feature is absent.
 
+`POST /api/search/exact` performs literal substring search only—no regex or embedding inference—with `{ "query", "repositoryPath" | "repositoryId", "caseSensitive"?, "wholeWord"? }`. It returns repository-relative file paths, one-based line numbers, bounded line snippets, character spans for highlighting, file/match counts, truncation, and source-coverage warnings. Exact search is capped at 256 query characters and 200 matching lines; it shares the 500-file, 256 KiB-per-file, 5 MiB total source safeguards used by semantic preparation.
+
 Search combines local MiniLM semantic ranking with identifier-aware lexical retrieval (camelCase, snake_case, paths, and code tokens) using reciprocal-rank fusion. Exact symbols are therefore not dependent on sentence-embedding similarity alone. Results remain unverified evidence, and source coverage limits can still exclude code outside the configured scope.
 
 JSON API requests must use `Content-Type: application/json` and are limited to 64 KiB. Invalid JSON returns `400`, oversized bodies return `413`, and unsupported content types return `415`, each with a JSON error body. Semantic searches are intentionally serialized because inference is CPU-intensive: one search runs, up to two wait for at most 30 seconds, and further requests receive `503` with `Retry-After: 5`. Health, repository-status, source-view, and static requests are not queued.
@@ -130,6 +133,7 @@ The server binds exclusively to `127.0.0.1:4317` (localhost only).
 | `GET`  | `/api/health` | Service health check |
 | `POST` | `/api/repo/status` | Inspect repository source scope and file coverage |
 | `POST` | `/api/search` | Run semantic search (loads model on first call) |
+| `POST` | `/api/search/exact` | Run instant literal text search (never loads model) |
 | `POST` | `/api/repositories/files` | List up to 500 safe, repository-relative source paths for navigation |
 | `POST` | `/api/source` | Read source file lines (read-only, path-safe) |
 
@@ -151,6 +155,11 @@ The server binds exclusively to `127.0.0.1:4317` (localhost only).
   "startLine": 10,
   "endLine": 50
 }
+```
+
+### POST /api/search/exact
+```json
+{ "query": "verifyToken", "repositoryPath": "/absolute/path/to/repo", "caseSensitive": false, "wholeWord": true }
 ```
 
 ---
@@ -200,6 +209,7 @@ On a temporary 60-file TypeScript fixture (120 regions) with the model already i
 - **Scope limits**: max 500 files, 256 KB per file, 5 MB total source per search
 - **Bounded reads**: files over 256 KB are skipped from filesystem metadata before their contents are allocated; files changing during scanning are skipped with a coverage warning
 - **First search is slow** — model download + full-repo embedding can take 30–90 seconds on first run
+- **Exact text is literal** — it does not support regex, symbols in unsupported languages, or results beyond its stated source and match limits
 - **Unverified candidates** — semantic similarity is not functional correctness; results require manual review
 - **Localhost only** — not designed for multi-user or networked deployment
 - **No authentication** — anyone with access to localhost can use the API

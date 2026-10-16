@@ -200,6 +200,13 @@ body {
 .source-switch { display:flex; gap:4px; margin:0 0 12px; padding:3px; width:max-content; background:var(--code-bg); border:1px solid var(--border); border-radius:var(--r-sm); }
 .source-switch button { border:0; background:transparent; color:var(--text-2); padding:6px 10px; border-radius:3px; font:600 12px var(--font-ui); cursor:pointer; }
 .source-switch button:hover, .source-switch__active { background:var(--surface-3) !important; color:var(--text-1) !important; }
+.search-mode { display:flex; gap:4px; margin:0 0 10px; padding:3px; width:max-content; background:var(--code-bg); border:1px solid var(--border); border-radius:var(--r-sm); }
+.search-mode button { border:0; background:transparent; color:var(--text-2); padding:7px 11px; border-radius:3px; font:600 12px var(--font-ui); cursor:pointer; }
+.search-mode button:hover, .search-mode__active { background:var(--surface-3) !important; color:var(--text-1) !important; }
+.search-mode button:focus-visible { outline:2px solid var(--border-focus); outline-offset:2px; }
+.exact-options { display:flex; gap:16px; margin:0 0 12px; color:var(--text-2); font:12px var(--font-ui); }
+.exact-options label { display:flex; align-items:center; gap:6px; cursor:pointer; }
+.exact-options input { accent-color:var(--accent-hi); }
 
 .field-input {
   flex: 1;
@@ -501,6 +508,9 @@ body {
   flex-direction: column;
   gap: 10px;
 }
+.exact-file-group { display: flex; flex-direction: column; gap: 8px; }
+.exact-file-group h3 { color: var(--text-2); font: 600 12px var(--font-ui); padding: 4px 2px 0; }
+.exact-file-group h3 span { color: var(--text-3); font-weight: 400; }
 
 .results-disclaimer {
   font-family: var(--font-ui);
@@ -636,6 +646,9 @@ body {
   tab-size: 2;
   min-width: 0;
 }
+.exact-excerpt { padding: 14px 18px; overflow-x: auto; color: var(--text-2); font: 12px/1.7 var(--font-mono); white-space: pre; }
+.exact-line-number { display: inline-block; min-width: 3.2em; margin-right: 14px; color: var(--text-3); text-align: right; user-select: none; }
+.exact-highlight { background: color-mix(in srgb, var(--yellow) 28%, transparent); color: var(--text-1); border-radius: 2px; padding: 1px 0; }
 
 .card-footer {
   padding: 7px 16px;
