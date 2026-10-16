@@ -20,6 +20,7 @@ export interface RepoStatusResponse {
   status?: RepoStatus;
   message?: string;
 }
+
 export interface PreparedRepositoryResponse extends RepoStatusResponse {
   repositoryId?: string;
   source?: { type: 'local' | 'github'; label: string; githubUrl?: string; revision?: string };
@@ -48,12 +49,14 @@ export interface SearchResponse {
   reason?: string;
   message?: string;
 }
+
 export interface ExactMatch {
   filePath: string;
   line: number;
   text: string;
   occurrences: Array<{ start: number; end: number }>;
 }
+
 export interface ExactSearchResponse {
   ok: boolean;
   matches?: ExactMatch[];
@@ -73,14 +76,90 @@ export interface SourceResponse {
   notice?: string;
   message?: string;
 }
-export interface RepositoryFilesResponse { ok: boolean; files?: string[]; truncated?: boolean; message?: string; }
-export interface RepositoryMapNode { id: string; path: string; name: string; type: 'directory' | 'file'; parentId: string | null; language?: string; sizeBytes?: number; }
-export interface RepositoryMapResponse { ok: boolean; root?: string; nodes?: RepositoryMapNode[]; truncated?: boolean; warnings?: string[]; message?: string; }
-export interface SourceSymbol { filePath: string; name: string; kind: string; startLine: number; endLine: number; containerName?: string; exported?: boolean; }
-export interface SymbolsResponse { ok: boolean; symbols?: SourceSymbol[]; truncated?: boolean; scope?: SearchScopeInfo; message?: string; }
-export interface SymbolUsage { filePath: string; line: number; column: number; preview: string; start: number; end: number; }
-export interface UsagesResponse { ok: boolean; usages?: SymbolUsage[]; truncated?: boolean; scope?: SearchScopeInfo; message?: string; }
-export interface DefinitionResponse { ok: boolean; outcome?: 'resolved' | 'unresolved' | 'ambiguous' | 'unsupported'; definition?: SourceSymbol; message?: string; }
+
+export interface RepositoryFilesResponse {
+  ok: boolean;
+  files?: string[];
+  truncated?: boolean;
+  message?: string;
+}
+
+export interface RepositoryMapNode {
+  id: string;
+  path: string;
+  name: string;
+  type: 'directory' | 'file';
+  parentId: string | null;
+  language?: string;
+  sizeBytes?: number;
+}
+
+export interface RepositoryMapResponse {
+  ok: boolean;
+  root?: string;
+  nodes?: RepositoryMapNode[];
+  truncated?: boolean;
+  warnings?: string[];
+  message?: string;
+}
+
+export interface SourceSymbol {
+  filePath: string;
+  name: string;
+  kind: string;
+  startLine: number;
+  endLine: number;
+  containerName?: string;
+  exported?: boolean;
+}
+
+export interface SymbolsResponse {
+  ok: boolean;
+  symbols?: SourceSymbol[];
+  truncated?: boolean;
+  scope?: SearchScopeInfo;
+  message?: string;
+}
+
+export interface SymbolUsage {
+  filePath: string;
+  line: number;
+  column: number;
+  preview: string;
+  start: number;
+  end: number;
+}
+
+export interface UsagesResponse {
+  ok: boolean;
+  usages?: SymbolUsage[];
+  truncated?: boolean;
+  scope?: SearchScopeInfo;
+  message?: string;
+}
+
+export interface DefinitionResponse {
+  ok: boolean;
+  outcome?: 'resolved' | 'unresolved' | 'ambiguous' | 'unsupported';
+  definition?: SourceSymbol;
+  message?: string;
+}
+
+export interface LanguageAdapterInfo {
+  id: string;
+  name: string;
+  extensions: string[];
+  capabilities: {
+    structural: boolean;
+    usages?: boolean;
+    definitions?: boolean;
+  };
+  parserAvailable: boolean;
+}
+
+export interface LanguagesResponse {
+  languages: LanguageAdapterInfo[];
+}
 
 // ── API client ────────────────────────────────────────────────────────────────
 
@@ -93,7 +172,7 @@ async function post<T>(path: string, body: unknown): Promise<T> {
     body: JSON.stringify(body),
   });
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText })) as { error?: string };
+    const err = (await res.json().catch(() => ({ error: res.statusText }))) as { error?: string };
     throw new Error(err.error ?? `HTTP ${res.status}`);
   }
   return res.json() as Promise<T>;
@@ -105,18 +184,42 @@ export async function apiHealth(): Promise<HealthResponse> {
   return res.json() as Promise<HealthResponse>;
 }
 
+export async function apiLanguages(): Promise<LanguagesResponse> {
+  const res = await fetch(`${BASE}/languages`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json() as Promise<LanguagesResponse>;
+}
+
 export async function apiRepoStatus(repositoryPath: string): Promise<RepoStatusResponse> {
   return post<RepoStatusResponse>('/repo/status', { repositoryPath });
 }
-export async function apiPrepareRepository(type: 'local' | 'github', value: string, refresh = false): Promise<PreparedRepositoryResponse> {
+
+export async function apiPrepareRepository(
+  type: 'local' | 'github',
+  value: string,
+  refresh = false
+): Promise<PreparedRepositoryResponse> {
   return post<PreparedRepositoryResponse>('/repositories/prepare', { source: { type, value }, refresh });
 }
 
-export async function apiSearch(query: string, repositoryPath: string, repositoryId?: string): Promise<SearchResponse> {
+export async function apiSearch(
+  query: string,
+  repositoryPath: string,
+  repositoryId?: string
+): Promise<SearchResponse> {
   return post<SearchResponse>('/search', repositoryId ? { query, repositoryId } : { query, repositoryPath });
 }
-export async function apiExactSearch(query: string, repositoryPath: string, options: { caseSensitive: boolean; wholeWord: boolean }, repositoryId?: string): Promise<ExactSearchResponse> {
-  return post<ExactSearchResponse>('/search/exact', repositoryId ? { query, repositoryId, ...options } : { query, repositoryPath, ...options });
+
+export async function apiExactSearch(
+  query: string,
+  repositoryPath: string,
+  options: { caseSensitive: boolean; wholeWord: boolean },
+  repositoryId?: string
+): Promise<ExactSearchResponse> {
+  return post<ExactSearchResponse>(
+    '/search/exact',
+    repositoryId ? { query, repositoryId, ...options } : { query, repositoryPath, ...options }
+  );
 }
 
 export async function apiSource(
@@ -124,16 +227,64 @@ export async function apiSource(
   filePath: string,
   startLine: number,
   endLine: number,
-  context = 25, repositoryId?: string,
+  context = 25,
+  repositoryId?: string
 ): Promise<SourceResponse> {
-  return post<SourceResponse>('/source', repositoryId ? { repositoryId, filePath, startLine, endLine, context } : { repositoryPath, filePath, startLine, endLine, context });
+  return post<SourceResponse>(
+    '/source',
+    repositoryId
+      ? { repositoryId, filePath, startLine, endLine, context }
+      : { repositoryPath, filePath, startLine, endLine, context }
+  );
 }
-export async function apiRepositoryFiles(repositoryPath: string, repositoryId?: string): Promise<RepositoryFilesResponse> {
-  return post<RepositoryFilesResponse>('/repositories/files', repositoryId ? { repositoryId } : { repositoryPath });
+
+export async function apiRepositoryFiles(
+  repositoryPath: string,
+  repositoryId?: string
+): Promise<RepositoryFilesResponse> {
+  return post<RepositoryFilesResponse>(
+    '/repositories/files',
+    repositoryId ? { repositoryId } : { repositoryPath }
+  );
 }
-export async function apiRepositoryMap(repositoryPath: string, repositoryId?: string): Promise<RepositoryMapResponse> {
-  return post<RepositoryMapResponse>('/repository/map', repositoryId ? { repositoryId } : { repositoryPath });
+
+export async function apiRepositoryMap(
+  repositoryPath: string,
+  repositoryId?: string
+): Promise<RepositoryMapResponse> {
+  return post<RepositoryMapResponse>(
+    '/repository/map',
+    repositoryId ? { repositoryId } : { repositoryPath }
+  );
 }
-export async function apiSymbols(repositoryPath: string, repositoryId?: string): Promise<SymbolsResponse> { return post<SymbolsResponse>('/symbols', repositoryId ? { repositoryId } : { repositoryPath }); }
-export async function apiSymbolUsages(symbol: SourceSymbol, repositoryPath: string, repositoryId?: string): Promise<UsagesResponse> { return post<UsagesResponse>('/symbols/usages', repositoryId ? { repositoryId, symbol } : { repositoryPath, symbol }); }
-export async function apiSymbolDefinition(filePath: string, line: number, column: number, repositoryPath: string, repositoryId?: string): Promise<DefinitionResponse> { return post<DefinitionResponse>('/symbols/definition', repositoryId ? { repositoryId, filePath, line, column } : { repositoryPath, filePath, line, column }); }
+
+export async function apiSymbols(
+  repositoryPath: string,
+  repositoryId?: string
+): Promise<SymbolsResponse> {
+  return post<SymbolsResponse>('/symbols', repositoryId ? { repositoryId } : { repositoryPath });
+}
+
+export async function apiSymbolUsages(
+  symbol: SourceSymbol,
+  repositoryPath: string,
+  repositoryId?: string
+): Promise<UsagesResponse> {
+  return post<UsagesResponse>(
+    '/symbols/usages',
+    repositoryId ? { repositoryId, symbol } : { repositoryPath, symbol }
+  );
+}
+
+export async function apiSymbolDefinition(
+  filePath: string,
+  line: number,
+  column: number,
+  repositoryPath: string,
+  repositoryId?: string
+): Promise<DefinitionResponse> {
+  return post<DefinitionResponse>(
+    '/symbols/definition',
+    repositoryId ? { repositoryId, filePath, line, column } : { repositoryPath, filePath, line, column }
+  );
+}

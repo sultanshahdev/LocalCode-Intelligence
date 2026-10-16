@@ -66,14 +66,19 @@ async function getEmbedder(): Promise<Embedder> {
 function isSafeOrigin(req: IncomingMessage): boolean {
   const origin = req.headers['origin'];
   if (origin === undefined) return true; // same-origin / non-browser
+  const localPort = req.socket?.localPort;
   // Allow only this app and the expected Vite development origin.
   // Any arbitrary localhost port would let unrelated local web apps read source.
-  return [
+  const allowed = [
     'http://localhost:' + PORT,
     'http://127.0.0.1:' + PORT,
     'http://localhost:5173',
     'http://127.0.0.1:5173',
-  ].includes(origin);
+  ];
+  if (localPort) {
+    allowed.push('http://localhost:' + localPort, 'http://127.0.0.1:' + localPort);
+  }
+  return allowed.includes(origin);
 }
 
 function setCorsHeaders(res: ServerResponse, req: IncomingMessage): void {
