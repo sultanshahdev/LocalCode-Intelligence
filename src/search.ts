@@ -1,10 +1,11 @@
 import {
-  createLocalEmbedder,
+  createLocalEmbedder, CachingEmbedder,
   retrieveHybridCandidates,
   selectDisplayCandidates,
   type Embedder,
   type SearchCandidate,
 } from './retrieval.js';
+import { PersistentCachingEmbedder } from './persistent-embedding-cache.js';
 import { prepareSourceScope, type SourceScope } from './source.js';
 import { assessRelevance, type RelevanceAssessment } from './relevance.js';
 
@@ -27,7 +28,7 @@ export interface SearchDependencies {
 
 const defaultDependencies: SearchDependencies = {
   prepare: prepareSourceScope,
-  createEmbedder: createLocalEmbedder,
+  createEmbedder: async () => new PersistentCachingEmbedder(new CachingEmbedder(await createLocalEmbedder()), 'Xenova/all-MiniLM-L6-v2:q8', undefined, 384),
 };
 
 export async function searchRepository(

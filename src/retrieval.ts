@@ -3,8 +3,12 @@ import { classifySearchIntent, type SearchIntent } from './search-intent.js';
 
 export const DEFAULT_MODEL = 'Xenova/all-MiniLM-L6-v2';
 
+/** Specifies which embedding inputs are source regions; queries must never be persisted. */
+export interface EmbeddingRequestOptions {
+  sourceStartIndex?: number;
+}
 export interface Embedder {
-  embed(texts: readonly string[]): Promise<number[][]>;
+  embed(texts: readonly string[], options?: EmbeddingRequestOptions): Promise<number[][]>;
 }
 
 export interface EmbeddingCacheStats {
@@ -151,7 +155,7 @@ export async function retrieveCandidates(
   limit = 5,
 ): Promise<SearchCandidate[]> {
   if (regions.length === 0) return [];
-  const vectors = await embedder.embed([query, ...regions.map(regionEmbeddingText)]);
+  const vectors = await embedder.embed([query, ...regions.map(regionEmbeddingText)], { sourceStartIndex: 1 });
   const queryVector = vectors[0];
   if (queryVector === undefined || vectors.length !== regions.length + 1) {
     throw new Error('Embedding runtime returned an unexpected number of vectors.');
