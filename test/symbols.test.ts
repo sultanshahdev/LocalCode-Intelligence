@@ -72,10 +72,61 @@ test('resolves lexical bindings, imports, and rejects stale coordinates without 
   const root = await fixture();
   await writeFile(join(root, 'dep.ts'), 'export default function defaultFn() {}\nexport function named() {}\n');
   await writeFile(join(root, 'main.ts'), 'import localDefault, { named as localNamed } from "./dep";\nfunction outer() {}\nfunction scoped() { const outer = 1; return outer; }\nlocalDefault(); localNamed(); outer();\n');
-  const resolved = await resolveDefinition(root, { filePath: 'main.ts', line: 4, column: 18 });
-  assert.equal(resolved.outcome, 'resolved'); if (resolved.outcome === 'resolved') assert.equal(resolved.definition.startLine, 2);
+  const resolved = await resolveDefinition(root, { filePath: 'main.ts', line: 4, column: 31 });
+  assert.equal(resolved.outcome, 'resolved');
+  if (resolved.outcome === 'resolved') {
+    assert.equal(resolved.definition.filePath, 'main.ts');
+    assert.equal(resolved.definition.name, 'outer');
+    assert.equal(resolved.definition.kind, 'function');
+    assert.equal(resolved.definition.startLine, 2);
+    assert.equal(resolved.definition.endLine, 2);
+  }
+  const importResolved = await resolveDefinition(root, { filePath: 'main.ts', line: 4, column: 1 });
+  assert.equal(importResolved.outcome, 'resolved');
+  if (importResolved.outcome === 'resolved') {
+    assert.equal(importResolved.definition.filePath, 'dep.ts');
+    assert.equal(importResolved.definition.name, 'default');
+    assert.equal(importResolved.definition.startLine, 1);
+    assert.equal(importResolved.definition.endLine, 1);
+  }
+  const namedImportResolved = await resolveDefinition(root, { filePath: 'main.ts', line: 4, column: 17 });
+  assert.equal(namedImportResolved.outcome, 'resolved');
+  if (namedImportResolved.outcome === 'resolved') {
+    assert.equal(namedImportResolved.definition.filePath, 'dep.ts');
+    assert.equal(namedImportResolved.definition.name, 'named');
+    assert.equal(namedImportResolved.definition.startLine, 2);
+    assert.equal(namedImportResolved.definition.endLine, 2);
+  }
   const shadowed = await resolveDefinition(root, { filePath: 'main.ts', line: 3, column: 47 });
-  assert.equal(shadowed.outcome, 'resolved'); if (shadowed.outcome === 'resolved') assert.equal(shadowed.definition.startLine, 3);
+  assert.equal(shadowed.outcome, 'resolved');
+  if (shadowed.outcome === 'resolved') {
+    assert.equal(shadowed.definition.filePath, 'main.ts');
+    assert.equal(shadowed.definition.name, 'outer');
+    assert.equal(shadowed.definition.kind, 'variable');
+    assert.equal(shadowed.definition.startLine, 3);
+    assert.equal(shadowed.definition.endLine, 3);
+  }
   assert.equal((await resolveDefinition(root, { filePath: 'main.ts', line: 99, column: 1 })).outcome, 'unsupported');
   assert.equal((await resolveDefinition(root, { filePath: '../main.ts', line: 1, column: 1 })).outcome, 'unsupported');
+  assert.equal((await resolveDefinition(root, { filePath: 'main.ts/../outside.ts', line: 1, column: 1 })).outcome, 'unsupported');
+  assert.equal((await resolveDefinition(root, { filePath: '/main.ts', line: 1, column: 1 })).outcome, 'unsupported');
+});
+
+test('definition resolution skips symlinks and enforces bounded source limits', async () => {
+  const root = await fixture();
+  await writeFile(join(root, 'source.ts'), 'export const secret = 42;\n');
+  await symlink(join(root, 'source.ts'), join(root, 'symlinked.ts'));
+  // Symlinked file should be rejected as not part of the discovered source scope
+  const symlinkResult = await resolveDefinition(root, { filePath: 'symlinked.ts', line: 1, column: 14 });
+  assert.equal(symlinkResult.outcome, 'unsupported');
+
+  // Bounded source limits skip files that exceed byte or count limits
+  await writeFile(join(root, 'consumer.ts'), 'import { secret } from "./source";\nconst val = secret;\n');
+  const limitedResult = await resolveDefinition(root, { filePath: 'consumer.ts', line: 2, column: 13 }, {
+    maxFiles: 1, maxFileBytes: 256 * 1024, maxTotalBytes: 5 * 1024 * 1024,
+    windowLines: 40, overlapLines: 10,
+  });
+  // Since maxFiles is 1, consumer.ts or source.ts is excluded; consumer or target won't both be resolved
+  assert.ok(limitedResult.outcome === 'unsupported' || limitedResult.outcome === 'unresolved');
+  assert.ok(limitedResult.warnings.some(w => w.includes('File limit reached') || w.includes('Skipped')));
 });
