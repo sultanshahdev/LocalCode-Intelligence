@@ -1,6 +1,6 @@
 import { open, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
-import { relative, extname, resolve } from 'node:path';
+import { relative, extname, resolve, isAbsolute, win32 } from 'node:path';
 import * as ts from 'typescript';
 
 import { DEFAULT_SOURCE_LIMITS, discoverSourceFiles, type SourceLimits } from './source.js';
@@ -158,15 +158,16 @@ function declarationNamePosition(sf: ts.SourceFile, symbol: SourceSymbol): numbe
 
 /** Resolves only compiler-proven local bindings from a bounded in-memory source graph. */
 export async function resolveDefinition(repositoryPath: string, request: { filePath: string; line: number; column: number }): Promise<DefinitionResult> {
-  if (!request.filePath || request.filePath.includes('\\') || request.filePath.split('/').some(p => !p || p === '.' || p === '..') || request.line < 1 || request.column < 1 || !Number.isInteger(request.line) || !Number.isInteger(request.column)) return { outcome: 'unsupported', message: 'A valid repository-relative identifier position is required.', warnings: [] };
+  if (!request.filePath || request.filePath.includes('\\') || isAbsolute(request.filePath) || win32.isAbsolute(request.filePath) || request.filePath.split('/').some(p => !p || p === '.' || p === '..') || request.line < 1 || request.column < 1 || !Number.isInteger(request.line) || !Number.isInteger(request.column)) return { outcome: 'unsupported', message: 'A valid repository-relative identifier position is required.', warnings: [] };
   const files = await discoverSourceFiles(repositoryPath, DEFAULT_SOURCE_LIMITS.maxFiles + 1); const warnings: string[] = []; let total = 0; const texts = new Map<string, string>();
   for (const path of files.slice(0, DEFAULT_SOURCE_LIMITS.maxFiles)) { try { const size = (await stat(path)).size; if (size > DEFAULT_SOURCE_LIMITS.maxFileBytes || total + size > DEFAULT_SOURCE_LIMITS.maxTotalBytes) { warnings.push(`Skipped ${relative(repositoryPath, path)} due to source limits.`); continue; } const text = await readBounded(path, DEFAULT_SOURCE_LIMITS.maxFileBytes); total += Buffer.byteLength(text); texts.set(resolve(path), text); } catch { warnings.push(`Skipped ${relative(repositoryPath, path)}: unavailable.`); } }
-  const target = resolve(repositoryPath, request.filePath); const text = texts.get(target); if (!text) return { outcome: 'unsupported', message: 'The selected source file is outside the available repository scope.', warnings };
+  const root = resolve(repositoryPath); const target = resolve(root, request.filePath); if (relative(root, target).startsWith('..')) return { outcome: 'unsupported', message: 'The selected source file is outside the repository.', warnings }; const text = texts.get(target); if (!text) return { outcome: 'unsupported', message: 'The selected source file is outside the available repository scope.', warnings };
   const options: ts.CompilerOptions = { allowJs: true, checkJs: true, noLib: true, target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext, moduleResolution: ts.ModuleResolutionKind.Node10, jsx: ts.JsxEmit.Preserve };
   const host: ts.CompilerHost = { fileExists: f => texts.has(resolve(f)), readFile: f => texts.get(resolve(f)), getSourceFile: (f, lang) => { const value = texts.get(resolve(f)); return value === undefined ? undefined : ts.createSourceFile(resolve(f), value, lang, true, scriptKind(f)); }, getDefaultLibFileName: () => '', writeFile: () => undefined, getCurrentDirectory: () => resolve(repositoryPath), getDirectories: () => [], getCanonicalFileName: f => f, useCaseSensitiveFileNames: () => true, getNewLine: () => '\n' };
   const program = ts.createProgram({ rootNames: [...texts.keys()], options, host }); const sf = program.getSourceFile(target); if (!sf) return { outcome: 'unresolved', message: 'The selected source file is unavailable.', warnings };
+  const lines = text.split(/\r?\n/); if (request.line > lines.length || request.column > (lines[request.line - 1]?.length ?? 0) + 1) return { outcome: 'unsupported', message: 'The selected position is outside the current source file.', warnings };
   const lineStart = sf.getPositionOfLineAndCharacter(request.line - 1, request.column - 1); let found: ts.Identifier | undefined;
-  const visit = (node: ts.Node): void => { if (found) return; if (ts.isIdentifier(node) && lineStart >= node.getStart(sf) && lineStart <= node.getEnd()) found = node; else ts.forEachChild(node, visit); }; visit(sf);
+  const visit = (node: ts.Node): void => { if (found) return; if (ts.isIdentifier(node) && lineStart >= node.getStart(sf) && lineStart < node.getEnd()) found = node; else ts.forEachChild(node, visit); }; visit(sf);
   if (!found) return { outcome: 'unsupported', message: 'No identifier exists at the selected position.', warnings };
   const checker = program.getTypeChecker(); let symbol = checker.getSymbolAtLocation(found); if (!symbol) return { outcome: 'unresolved', message: 'No local declaration could be proven for this identifier.', warnings };
   if (symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
