@@ -385,6 +385,7 @@ export default function App() {
   const [usagesLoading, setUsagesLoading] = useState(false);
   const [usagesError, setUsagesError] = useState<string | null>(null);
   const [usagesTruncated, setUsagesTruncated] = useState(false);
+  const [usagesWarnings, setUsagesWarnings] = useState<string[]>([]);
 
   const queryInputRef = useRef<HTMLInputElement>(null);
 
@@ -399,6 +400,7 @@ export default function App() {
     setUsagesLoading(false);
     setUsagesError(null);
     setUsagesTruncated(false);
+    setUsagesWarnings([]);
     setRepoLoading(true);
     setRepoError(null);
     if (!refresh) {
@@ -451,7 +453,7 @@ export default function App() {
     }
   }, [repoPath, sourceType]);
 
-  const invalidateRepository = () => { repositoryGeneration.current += 1; searchGeneration.current += 1; usageGeneration.current += 1; setUsageSymbol(null); setUsages([]); setUsagesLoading(false); setUsagesError(null); setUsagesTruncated(false); setRepoLoading(false); setSearchLoading(false); setRepositoryId(undefined); setRepoStatus(null); setResolvedPath(''); setGithubSource(null); setSearchResult(null); setExactResult(null); setSearchError(null); setRepoError(null); setActiveSource(null); setNavigatorFiles([]); setNavigatorError(null); setNavigatorLoading(false); setSymbols([]); setSymbolsError(null); setSymbolsLoading(false); setSymbolsTruncated(false); };
+  const invalidateRepository = () => { repositoryGeneration.current += 1; searchGeneration.current += 1; usageGeneration.current += 1; setUsageSymbol(null); setUsages([]); setUsagesLoading(false); setUsagesError(null); setUsagesTruncated(false); setUsagesWarnings([]); setRepoLoading(false); setSearchLoading(false); setRepositoryId(undefined); setRepoStatus(null); setResolvedPath(''); setGithubSource(null); setSearchResult(null); setExactResult(null); setSearchError(null); setRepoError(null); setActiveSource(null); setNavigatorFiles([]); setNavigatorError(null); setNavigatorLoading(false); setSymbols([]); setSymbolsError(null); setSymbolsLoading(false); setSymbolsTruncated(false); };
   const changeSource = (type: 'local' | 'github') => { invalidateRepository(); setSourceType(type); };
   const invalidateSearch = () => {
     searchGeneration.current += 1;
@@ -564,6 +566,7 @@ export default function App() {
              setUsages([]);
              setUsagesError(null);
              setUsagesTruncated(false);
+             setUsagesWarnings([]);
              void apiSymbolUsages(symbol, resolvedPath, repositoryId)
                .then(response => {
                  if (current !== usageGeneration.current) return;
@@ -573,6 +576,7 @@ export default function App() {
                  }
                  setUsages(response.usages ?? []);
                  setUsagesTruncated(response.truncated === true);
+                 setUsagesWarnings(response.scope?.warnings ?? []);
                })
                .catch(() => {
                  if (current === usageGeneration.current) setUsagesError('Unable to load possible usages.');
@@ -588,6 +592,8 @@ export default function App() {
              {!usagesLoading && usagesError && <div className="explorer-state" role="alert">{usagesError}</div>}
              {!usagesLoading && !usagesError && usages.length === 0 && <div className="explorer-state">No possible usages found.</div>}
              {!usagesLoading && !usagesError && usagesTruncated && <div className="explorer-state">Only the first 200 possible usages are shown.</div>}
+             {!usagesLoading && !usagesError && usagesWarnings.map((warning, index) =>
+               <div key={index} className="explorer-state" role="status">{warning}</div>)
              {!usagesLoading && !usagesError && usages.map(u =>
                <button key={`${u.filePath}:${u.line}:${u.column}`} className="explorer-file"
                  onClick={() => setActiveSource({ filePath: u.filePath, startLine: u.line, endLine: u.line, text: '', score: 0 })}>
