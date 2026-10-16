@@ -3,7 +3,7 @@ import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { afterEach } from 'node:test';
-import { listRepositorySymbols, findPossibleUsages } from '../src/symbols.js';
+import { listRepositorySymbols, findPossibleUsages, resolveDefinition } from '../src/symbols.js';
 
 const roots: string[] = []; afterEach(async () => Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))));
 async function fixture() { const root = await mkdtemp(join(tmpdir(), 'localcode-symbols-')); roots.push(root); return root; }
@@ -66,4 +66,16 @@ test('possible usages respect symlink exclusions and partial source coverage', a
   assert.equal(result.usages.length, 1);
   assert.equal(result.usages[0]?.filePath, 'entry.ts');
   assert.ok(result.scope.warnings.some(w => w.includes('File limit reached')));
+});
+
+test('resolves lexical bindings, imports, and rejects stale coordinates without guessing', async () => {
+  const root = await fixture();
+  await writeFile(join(root, 'dep.ts'), 'export default function defaultFn() {}\nexport function named() {}\n');
+  await writeFile(join(root, 'main.ts'), 'import localDefault, { named as localNamed } from "./dep";\nfunction outer() {}\nfunction scoped() { const outer = 1; return outer; }\nlocalDefault(); localNamed(); outer();\n');
+  const resolved = await resolveDefinition(root, { filePath: 'main.ts', line: 4, column: 18 });
+  assert.equal(resolved.outcome, 'resolved'); if (resolved.outcome === 'resolved') assert.equal(resolved.definition.startLine, 2);
+  const shadowed = await resolveDefinition(root, { filePath: 'main.ts', line: 3, column: 47 });
+  assert.equal(shadowed.outcome, 'resolved'); if (shadowed.outcome === 'resolved') assert.equal(shadowed.definition.startLine, 3);
+  assert.equal((await resolveDefinition(root, { filePath: 'main.ts', line: 99, column: 1 })).outcome, 'unsupported');
+  assert.equal((await resolveDefinition(root, { filePath: '../main.ts', line: 1, column: 1 })).outcome, 'unsupported');
 });
