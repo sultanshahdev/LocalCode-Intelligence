@@ -593,7 +593,7 @@ export default function App() {
              {!usagesLoading && !usagesError && usages.length === 0 && <div className="explorer-state">No possible usages found.</div>}
              {!usagesLoading && !usagesError && usagesTruncated && <div className="explorer-state">Only the first 200 possible usages are shown.</div>}
              {!usagesLoading && !usagesError && usagesWarnings.map((warning, index) =>
-               <div key={index} className="explorer-state" role="status">{warning}</div>)
+               <div key={index} className="explorer-state" role="status">{warning}</div>)}
              {!usagesLoading && !usagesError && usages.map(u =>
                <button key={`${u.filePath}:${u.line}:${u.column}`} className="explorer-file"
                  onClick={() => setActiveSource({ filePath: u.filePath, startLine: u.line, endLine: u.line, text: '', score: 0 })}>
