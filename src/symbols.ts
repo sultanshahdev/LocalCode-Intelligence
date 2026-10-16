@@ -15,6 +15,8 @@ export interface SymbolResult {
   symbols: SourceSymbol[]; truncated: boolean;
   scope: { filesProcessed: number; filesDiscovered: number; warnings: string[] };
 }
+export interface SymbolUsage { filePath: string; line: number; column: number; preview: string; start: number; end: number; }
+export interface UsageResult { symbol: SourceSymbol; usages: SymbolUsage[]; truncated: boolean; scope: { filesProcessed: number; filesDiscovered: number; warnings: string[] }; }
 
 /** Parses a bounded, safe source scope without executing repository code. */
 export async function listRepositorySymbols(repositoryPath: string, limits: SourceLimits = DEFAULT_SOURCE_LIMITS): Promise<SymbolResult> {
@@ -100,3 +102,35 @@ async function readBounded(path: string, maxBytes: number): Promise<string> {
   try { const buffer = Buffer.alloc(maxBytes + 1); let count = 0; while (count < buffer.length) { const { bytesRead } = await handle.read(buffer, count, buffer.length - count, count); if (bytesRead === 0) break; count += bytesRead; } return buffer.subarray(0, count).toString('utf8'); }
   finally { await handle.close(); }
 }
+
+/** Finds AST identifier name occurrences only; these are deliberately not type-resolved references. */
+export async function findPossibleUsages(repositoryPath: string, selected: Pick<SourceSymbol, 'filePath' | 'name' | 'kind' | 'startLine'>, limits: SourceLimits = DEFAULT_SOURCE_LIMITS): Promise<UsageResult> {
+  const declarationScan = await listRepositorySymbols(repositoryPath, limits);
+  const symbol = declarationScan.symbols.find(item => item.filePath === selected.filePath && item.name === selected.name && item.kind === selected.kind && item.startLine === selected.startLine);
+  if (!symbol) throw new Error('The selected declaration no longer exists in this repository.');
+  const files = await discoverSourceFiles(repositoryPath, limits.maxFiles + 1); const warnings = [...declarationScan.scope.warnings]; const filesDiscovered = files.length;
+  if (files.length > limits.maxFiles) files.length = limits.maxFiles;
+  const usages: SymbolUsage[] = []; let filesProcessed = 0; let totalBytes = 0; let truncated = false;
+  for (const absolutePath of files) {
+    const filePath = relative(repositoryPath, absolutePath); let size: number;
+    try { size = (await stat(absolutePath)).size; } catch { warnings.push(`Skipped ${filePath}: file became unavailable during scanning.`); continue; }
+    if (size > limits.maxFileBytes) { warnings.push(`Skipped ${filePath}: exceeds ${limits.maxFileBytes} bytes.`); continue; }
+    if (totalBytes + size > limits.maxTotalBytes) { warnings.push(`Source byte limit reached (${limits.maxTotalBytes}); remaining files were not processed.`); break; }
+    let text: string; try { text = await readBounded(absolutePath, limits.maxFileBytes); } catch { warnings.push(`Skipped ${filePath}: file became unavailable during scanning.`); continue; }
+    totalBytes += Buffer.byteLength(text); filesProcessed += 1; const sf = ts.createSourceFile(filePath, text, ts.ScriptTarget.Latest, true, scriptKind(filePath));
+    const visit = (node: ts.Node): void => {
+      if (truncated) return;
+      if (ts.isIdentifier(node) && node.text === symbol.name) {
+        const pos = sf.getLineAndCharacterOfPosition(node.getStart(sf)); const line = pos.line + 1;
+        const isDeclaration = filePath === symbol.filePath && line === symbol.startLine && node.getStart(sf) === declarationNamePosition(sf, symbol);
+        if (!isDeclaration) { const preview = text.split(/\r?\n/)[pos.line] ?? ''; usages.push({ filePath, line, column: pos.character + 1, preview: preview.slice(0, 320), start: pos.character, end: pos.character + node.text.length }); if (usages.length >= 200) { truncated = true; return; } }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sf); if (truncated) break;
+  }
+  if (truncated) warnings.push('Usage limit reached (200); results are truncated.');
+  usages.sort((a, b) => a.filePath.localeCompare(b.filePath) || a.line - b.line || a.column - b.column);
+  return { symbol, usages, truncated, scope: { filesProcessed, filesDiscovered, warnings } };
+}
+function declarationNamePosition(sf: ts.SourceFile, symbol: SourceSymbol): number { let position = -1; const visit = (node: ts.Node) => { if (position >= 0) return; if (ts.isIdentifier(node) && node.text === symbol.name && sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1 === symbol.startLine) position = node.getStart(sf); else ts.forEachChild(node, visit); }; visit(sf); return position; }

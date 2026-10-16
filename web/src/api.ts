@@ -76,6 +76,8 @@ export interface SourceResponse {
 export interface RepositoryFilesResponse { ok: boolean; files?: string[]; truncated?: boolean; message?: string; }
 export interface SourceSymbol { filePath: string; name: string; kind: string; startLine: number; endLine: number; containerName?: string; exported?: boolean; }
 export interface SymbolsResponse { ok: boolean; symbols?: SourceSymbol[]; truncated?: boolean; scope?: SearchScopeInfo; message?: string; }
+export interface SymbolUsage { filePath: string; line: number; column: number; preview: string; start: number; end: number; }
+export interface UsagesResponse { ok: boolean; usages?: SymbolUsage[]; truncated?: boolean; message?: string; }
 
 // ── API client ────────────────────────────────────────────────────────────────
 
@@ -127,3 +129,4 @@ export async function apiRepositoryFiles(repositoryPath: string, repositoryId?: 
   return post<RepositoryFilesResponse>('/repositories/files', repositoryId ? { repositoryId } : { repositoryPath });
 }
 export async function apiSymbols(repositoryPath: string, repositoryId?: string): Promise<SymbolsResponse> { return post<SymbolsResponse>('/symbols', repositoryId ? { repositoryId } : { repositoryPath }); }
+export async function apiSymbolUsages(symbol: SourceSymbol, repositoryPath: string, repositoryId?: string): Promise<UsagesResponse> { return post<UsagesResponse>('/symbols/usages', repositoryId ? { repositoryId, symbol } : { repositoryPath, symbol }); }
