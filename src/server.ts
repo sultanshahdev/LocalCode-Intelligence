@@ -16,7 +16,8 @@ import { inspectRepositorySearchStatus } from './status.js';
 import { searchRepository } from './search.js';
 import { CachingEmbedder, createLocalEmbedder, type Embedder } from './retrieval.js';
 import { PersistentCachingEmbedder } from './persistent-embedding-cache.js';
-import { prepareSourceScope, DEFAULT_SOURCE_LIMITS, listNavigableSourceFiles } from './source.js';
+import { prepareSourceScope, DEFAULT_SOURCE_LIMITS, listNavigableSourceFiles, SOURCE_EXTENSIONS } from './source.js';
+import { defaultLanguageRegistry } from './languages/index.js';
 import { SearchExecutionController, SearchOverloadedError, SearchQueueAbortedError } from './search-execution.js';
 import { GitHubRepositoryAcquirer, GitHubRepositoryError } from './github-repository.js';
 import { EXACT_SEARCH_LIMITS, searchExactText } from './exact-search.js';
@@ -153,9 +154,7 @@ function sendBodyError(res: ServerResponse, error: unknown): void {
 }
 
 // ── Source-view safety ────────────────────────────────────────────────────────
-const SUPPORTED_SOURCE_EXTENSIONS = new Set([
-  '.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.mts', '.cts',
-]);
+const SUPPORTED_SOURCE_EXTENSIONS = SOURCE_EXTENSIONS;
 const IGNORED_SOURCE_DIRECTORIES = new Set([
   '.git', 'node_modules', 'dist', 'build', 'coverage', '.next',
   '.nuxt', 'out', 'vendor', 'generated', '.cache',

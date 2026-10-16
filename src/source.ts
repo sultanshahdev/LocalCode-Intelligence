@@ -1,6 +1,7 @@
 import { open, readdir, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { extname, relative, resolve } from 'node:path';
+import { defaultLanguageRegistry, getDefaultLanguageRegistry, type LanguageRegistry } from './languages/index.js';
 
 export const DEFAULT_SOURCE_LIMITS = {
   maxFiles: 500,
@@ -10,8 +11,15 @@ export const DEFAULT_SOURCE_LIMITS = {
   overlapLines: 10,
 } as const;
 
-const SOURCE_EXTENSIONS = new Set(['.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.mts', '.cts']);
-const IGNORED_DIRECTORIES = new Set([
+export const SOURCE_EXTENSIONS = new Proxy(new Set<string>(), {
+  get(target, prop, receiver) {
+    const registryExtensions = getDefaultLanguageRegistry().getSupportedExtensions();
+    const value = Reflect.get(registryExtensions, prop, registryExtensions);
+    return typeof value === 'function' ? value.bind(registryExtensions) : value;
+  },
+});
+
+export const IGNORED_DIRECTORIES = new Set([
   '.git', 'node_modules', 'dist', 'build', 'coverage', '.next', '.nuxt', 'out', 'vendor', 'generated', '.cache',
 ]);
 
@@ -38,12 +46,13 @@ export interface SourceLimits {
   overlapLines: number;
 }
 
-/** Reads an explicitly bounded JavaScript/TypeScript scope without following symlinks. */
+/** Reads an explicitly bounded source scope without following symlinks. */
 export async function prepareSourceScope(
   repositoryPath: string,
   limits: SourceLimits = DEFAULT_SOURCE_LIMITS,
+  registry: LanguageRegistry = defaultLanguageRegistry,
 ): Promise<SourceScope> {
-  const files = await discoverSourceFiles(repositoryPath, limits.maxFiles + 1);
+  const files = await discoverSourceFiles(repositoryPath, limits.maxFiles + 1, registry);
   const warnings: string[] = [];
   const filesDiscovered = files.length;
   if (files.length > limits.maxFiles) {
@@ -92,7 +101,12 @@ export async function prepareSourceScope(
 
     totalBytes += bytes;
     filesProcessed += 1;
-    regions.push(...segmentSource(displayPath, content, limits));
+    const adapter = registry.getByPath(displayPath);
+    if (adapter?.segmentSource) {
+      regions.push(...adapter.segmentSource(displayPath, content, limits));
+    } else {
+      regions.push(...segmentSource(displayPath, content, limits));
+    }
   }
 
   return { regions, filesDiscovered, filesProcessed, warnings };
@@ -117,9 +131,13 @@ async function readBoundedSourceFile(path: string, maxBytes: number): Promise<st
 export async function discoverSourceFiles(
   repositoryPath: string,
   maximum: number = DEFAULT_SOURCE_LIMITS.maxFiles,
+  registry: LanguageRegistry = defaultLanguageRegistry,
 ): Promise<string[]> {
   const root = resolve(repositoryPath);
   const found: string[] = [];
+  const supportedExtensions = registry === defaultLanguageRegistry
+    ? SOURCE_EXTENSIONS
+    : registry.getSupportedExtensions();
 
   async function visit(directory: string): Promise<void> {
     if (found.length >= maximum) return;
@@ -137,7 +155,7 @@ export async function discoverSourceFiles(
       if (entry.isSymbolicLink()) continue;
       if (entry.isDirectory()) {
         if (!IGNORED_DIRECTORIES.has(entry.name)) await visit(path);
-      } else if (entry.isFile() && SOURCE_EXTENSIONS.has(extname(entry.name).toLowerCase())) {
+      } else if (entry.isFile() && supportedExtensions.has(extname(entry.name).toLowerCase())) {
         found.push(path);
       }
     }
@@ -150,8 +168,12 @@ export async function discoverSourceFiles(
 /** A bounded, repository-relative list for navigation UI. It deliberately uses
  * the same extension, ignored-directory, and no-symlink discovery policy as
  * search preparation. */
-export async function listNavigableSourceFiles(repositoryPath: string, maximum = DEFAULT_SOURCE_LIMITS.maxFiles): Promise<{ files: string[]; truncated: boolean }> {
-  const files = await discoverSourceFiles(repositoryPath, maximum + 1);
+export async function listNavigableSourceFiles(
+  repositoryPath: string,
+  maximum: number = DEFAULT_SOURCE_LIMITS.maxFiles,
+  registry: LanguageRegistry = defaultLanguageRegistry,
+): Promise<{ files: string[]; truncated: boolean }> {
+  const files = await discoverSourceFiles(repositoryPath, maximum + 1, registry);
   const truncated = files.length > maximum;
   return { files: files.slice(0, maximum).map(file => relative(repositoryPath, file)), truncated };
 }

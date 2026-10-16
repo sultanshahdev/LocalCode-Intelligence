@@ -208,7 +208,7 @@ On a temporary 60-file TypeScript fixture (120 regions) with the model already i
 
 ## Current Limitations
 
-- **JavaScript/TypeScript only** — no support for other languages
+- **JavaScript/TypeScript only** — language registry and pluggable adapter architecture are in place (see [docs/multilingual-architecture.md](docs/multilingual-architecture.md)); additional language adapters (Python, Go, etc.) are planned
 - **No persistent index** — source is still discovered on every request, so deleted files cannot be returned; persistent caching stores only derived source vectors, not a repository index
 - **Scope limits**: max 500 files, 256 KB per file, 5 MB total source per search
 - **Bounded reads**: files over 256 KB are skipped from filesystem metadata before their contents are allocated; files changing during scanning are skipped with a coverage warning
@@ -231,6 +231,12 @@ src/              Backend TypeScript
   source.ts       Source file discovery and segmentation
   status.ts       Repository status inspection
   repository.ts   Repository path validation
+  symbols.ts      AST Symbol extraction, usage lookup, and definition resolution
+  languages/      Pluggable language adapter architecture
+    types.ts      LanguageAdapter and capability contracts
+    registry.ts   LanguageRegistry extension resolution
+    javascript-typescript.ts JS/TS LanguageAdapter implementation
+    index.ts      Default registry factory and shared singleton
 
 web/              Frontend (React + TypeScript + Vite)
   src/App.tsx     Application UI
