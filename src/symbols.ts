@@ -117,13 +117,33 @@ export async function findPossibleUsages(repositoryPath: string, selected: Pick<
     if (size > limits.maxFileBytes) { warnings.push(`Skipped ${filePath}: exceeds ${limits.maxFileBytes} bytes.`); continue; }
     if (totalBytes + size > limits.maxTotalBytes) { warnings.push(`Source byte limit reached (${limits.maxTotalBytes}); remaining files were not processed.`); break; }
     let text: string; try { text = await readBounded(absolutePath, limits.maxFileBytes); } catch { warnings.push(`Skipped ${filePath}: file became unavailable during scanning.`); continue; }
-    totalBytes += Buffer.byteLength(text); filesProcessed += 1; const sf = ts.createSourceFile(filePath, text, ts.ScriptTarget.Latest, true, scriptKind(filePath));
+    const bytes = Buffer.byteLength(text);
+    if (bytes > limits.maxFileBytes || totalBytes + bytes > limits.maxTotalBytes) {
+      warnings.push(`Skipped ${filePath}: source byte limit exceeded during scanning.`);
+      continue;
+    }
+    totalBytes += bytes;
+    filesProcessed += 1;
+    const sf = ts.createSourceFile(filePath, text, ts.ScriptTarget.Latest, true, scriptKind(filePath));
+    const sourceLines = text.split(/\r?\n/);
+    // Find the declaration once per file, not once per matching identifier.
+    const declarationPosition = filePath === symbol.filePath ? declarationNamePosition(sf, symbol) : -1;
     const visit = (node: ts.Node): void => {
       if (truncated) return;
       if (ts.isIdentifier(node) && node.text === symbol.name) {
-        const pos = sf.getLineAndCharacterOfPosition(node.getStart(sf)); const line = pos.line + 1;
-        const isDeclaration = filePath === symbol.filePath && line === symbol.startLine && node.getStart(sf) === declarationNamePosition(sf, symbol);
-        if (!isDeclaration) { const preview = text.split(/\r?\n/)[pos.line] ?? ''; usages.push({ filePath, line, column: pos.character + 1, preview: preview.slice(0, 320), start: pos.character, end: pos.character + node.text.length }); if (usages.length >= 200) { truncated = true; return; } }
+        const offset = node.getStart(sf);
+        if (offset !== declarationPosition) {
+          const pos = sf.getLineAndCharacterOfPosition(offset);
+          const sourceLine = sourceLines[pos.line] ?? '';
+          // Keep the match visible even when the identifier is far into a long line.
+          const windowStart = Math.max(0, pos.character - 120);
+          const preview = sourceLine.slice(windowStart, windowStart + 320);
+          usages.push({
+            filePath, line: pos.line + 1, column: pos.character + 1, preview,
+            start: pos.character - windowStart, end: pos.character - windowStart + node.text.length,
+          });
+          if (usages.length >= 200) { truncated = true; return; }
+        }
       }
       ts.forEachChild(node, visit);
     };
