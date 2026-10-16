@@ -3,7 +3,7 @@ import { constants } from 'node:fs';
 import { relative, extname, resolve, isAbsolute, win32 } from 'node:path';
 import * as ts from 'typescript';
 
-import { DEFAULT_SOURCE_LIMITS, discoverSourceFiles, type SourceLimits } from './source.js';
+import { DEFAULT_SOURCE_LIMITS, discoverSourceFiles, type SourceLimits, type RepositorySourceSnapshot } from './source.js';
 import type { LanguageRegistry } from './languages/registry.js';
 
 export const SYMBOL_LIMITS = { maxSymbols: 1_000 } as const;
@@ -50,6 +50,13 @@ export async function listRepositorySymbols(repositoryPath: string, limits: Sour
   }
   if (truncated) warnings.push(`Symbol limit reached (${SYMBOL_LIMITS.maxSymbols}); refine the repository scope to see additional declarations.`);
   return { symbols, truncated, scope: { filesProcessed, filesDiscovered, warnings } };
+}
+
+/** Snapshot-only JS/TS structural analysis; intentionally performs no I/O. */
+export async function listRepositorySymbolsFromSnapshot(snapshot: RepositorySourceSnapshot, maximumSymbols: number = SYMBOL_LIMITS.maxSymbols): Promise<SymbolResult> {
+  const symbols: SourceSymbol[] = []; const warnings = [...snapshot.scope.warnings]; let truncated = snapshot.scope.truncated;
+  for (const file of snapshot.files) { if (file.languageId !== 'javascript-typescript') continue; const sf = ts.createSourceFile(file.filePath, file.content, ts.ScriptTarget.Latest, true, scriptKind(file.filePath)); const diagnostics = ts.transpileModule(file.content, { reportDiagnostics: true, compilerOptions: { target: ts.ScriptTarget.Latest }, fileName: file.filePath }).diagnostics ?? []; if (diagnostics.length) warnings.push(`Parsed ${file.filePath} with ${diagnostics.length} syntax error${diagnostics.length === 1 ? '' : 's'}; available declarations may be incomplete.`); extractSymbols(sf, file.filePath, symbols); if (symbols.length >= maximumSymbols) { symbols.length = maximumSymbols; truncated = true; break; } }
+  if (truncated) warnings.push(`Symbol limit reached (${maximumSymbols}); results are truncated.`); return { symbols, truncated, scope: { filesProcessed: snapshot.scope.filesProcessed, filesDiscovered: snapshot.scope.filesDiscovered, warnings } };
 }
 
 function extractSymbols(sourceFile: ts.SourceFile, filePath: string, output: SourceSymbol[]): void {
@@ -154,6 +161,11 @@ export async function findPossibleUsages(repositoryPath: string, selected: Pick<
   if (truncated) warnings.push('Usage limit reached (200); results are truncated.');
   usages.sort((a, b) => a.filePath.localeCompare(b.filePath) || a.line - b.line || a.column - b.column);
   return { symbol, usages, truncated, scope: { filesProcessed, filesDiscovered, warnings } };
+}
+export async function findPossibleUsagesFromSnapshot(snapshot: RepositorySourceSnapshot, selected: Pick<SourceSymbol, 'filePath' | 'name' | 'kind' | 'startLine'>): Promise<UsageResult> {
+  const declarationScan = await listRepositorySymbolsFromSnapshot(snapshot); const symbol = declarationScan.symbols.find(item => item.filePath === selected.filePath && item.name === selected.name && item.kind === selected.kind && item.startLine === selected.startLine); if (!symbol) throw new Error('The selected declaration no longer exists in this repository.'); const usages: SymbolUsage[] = []; let truncated = false; const warnings = [...declarationScan.scope.warnings];
+  for (const file of snapshot.files) { if (file.languageId !== 'javascript-typescript') continue; const sf = ts.createSourceFile(file.filePath, file.content, ts.ScriptTarget.Latest, true, scriptKind(file.filePath)); const lines = file.content.split(/\r?\n/); const declarationPosition = file.filePath === symbol.filePath ? declarationNamePosition(sf, symbol) : -1; const visit = (node: ts.Node): void => { if (truncated) return; if (ts.isIdentifier(node) && node.text === symbol.name) { const offset = node.getStart(sf); if (offset !== declarationPosition) { const pos = sf.getLineAndCharacterOfPosition(offset); const line = lines[pos.line] ?? ''; const start = Math.max(0, pos.character - 120); usages.push({ filePath: file.filePath, line: pos.line + 1, column: pos.character + 1, preview: line.slice(start, start + 320), start: pos.character - start, end: pos.character - start + node.text.length }); if (usages.length >= 200) { truncated = true; return; } } } ts.forEachChild(node, visit); }; visit(sf); if (truncated) break; }
+  if (truncated) warnings.push('Usage limit reached (200); results are truncated.'); usages.sort((a,b) => a.filePath.localeCompare(b.filePath) || a.line-b.line || a.column-b.column); return { symbol, usages, truncated, scope: { filesProcessed: snapshot.scope.filesProcessed, filesDiscovered: snapshot.scope.filesDiscovered, warnings } };
 }
 function declarationNamePosition(sf: ts.SourceFile, symbol: SourceSymbol): number { let position = -1; const visit = (node: ts.Node) => { if (position >= 0) return; if (ts.isIdentifier(node) && node.text === symbol.name && sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1 === symbol.startLine) position = node.getStart(sf); else ts.forEachChild(node, visit); }; visit(sf); return position; }
 

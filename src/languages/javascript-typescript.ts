@@ -1,7 +1,8 @@
-import { segmentSource, type SourceLimits, type SourceRegion } from '../source.js';
+import { segmentSource, type SourceLimits, type SourceRegion, type RepositorySourceSnapshot } from '../source.js';
 import {
   listRepositorySymbols,
   findPossibleUsages,
+  listRepositorySymbolsFromSnapshot, findPossibleUsagesFromSnapshot,
   resolveDefinition,
   type SourceSymbol,
   type SymbolResult,
@@ -61,6 +62,8 @@ export class JavaScriptTypeScriptAdapter implements LanguageAdapter {
   ): Promise<UsageResult> {
     return findPossibleUsages(repositoryPath, selected, limits, this.scopedRegistry);
   }
+  async extractSymbolsFromSnapshot(snapshot: RepositorySourceSnapshot, maximumSymbols?: number): Promise<SymbolResult> { return listRepositorySymbolsFromSnapshot(snapshot, maximumSymbols); }
+  async findPossibleUsagesInSnapshot(snapshot: RepositorySourceSnapshot, selected: Pick<SourceSymbol, 'filePath' | 'name' | 'kind' | 'startLine'>): Promise<UsageResult> { return findPossibleUsagesFromSnapshot(snapshot, selected); }
 
   async resolveDefinition(
     repositoryPath: string,

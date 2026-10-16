@@ -525,9 +525,8 @@ async function handleSymbols(req: IncomingMessage, res: ServerResponse): Promise
     const warnings: string[] = [...snapshot.scope.warnings];
 
     for (const adapter of structuralAdapters) {
-      const result = adapter.extractSymbolsFromSnapshot
-        ? await adapter.extractSymbolsFromSnapshot(snapshot, SYMBOL_LIMITS.maxSymbols - symbols.length)
-        : await adapter.extractSymbols!(validation.resolvedPath);
+      if (!adapter.extractSymbolsFromSnapshot) throw new Error(`Structural adapter ${adapter.id} does not support shared snapshots.`);
+      const result = await adapter.extractSymbolsFromSnapshot(snapshot, SYMBOL_LIMITS.maxSymbols - symbols.length);
       warnings.push(...result.scope.warnings);
       for (const sym of result.symbols) {
         if (symbols.length >= SYMBOL_LIMITS.maxSymbols) { truncated = true; break; }
@@ -574,9 +573,8 @@ async function handleSymbolUsages(req: IncomingMessage, res: ServerResponse): Pr
 
   try {
     const snapshot = await prepareRepositorySourceSnapshot(validation.resolvedPath);
-    const result = adapter.findPossibleUsagesInSnapshot
-      ? await adapter.findPossibleUsagesInSnapshot(snapshot, selected as never)
-      : await adapter.findPossibleUsages(validation.resolvedPath, selected as never);
+    if (!adapter.findPossibleUsagesInSnapshot) throw new Error(`Structural adapter ${adapter.id} does not support shared snapshots.`);
+    const result = await adapter.findPossibleUsagesInSnapshot(snapshot, selected as never);
     sendJson(res, 200, { ok: true, ...result });
   } catch (error) {
     sendJson(res, 200, { ok: false, message: error instanceof Error ? error.message : 'Possible usages could not be read.' });
