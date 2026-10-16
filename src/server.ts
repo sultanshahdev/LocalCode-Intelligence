@@ -16,12 +16,13 @@ import { inspectRepositorySearchStatus } from './status.js';
 import { searchRepository } from './search.js';
 import { CachingEmbedder, createLocalEmbedder, type Embedder } from './retrieval.js';
 import { PersistentCachingEmbedder } from './persistent-embedding-cache.js';
-import { prepareSourceScope, DEFAULT_SOURCE_LIMITS, listNavigableSourceFiles, SOURCE_EXTENSIONS } from './source.js';
+import { prepareSourceScope, prepareRepositorySourceSnapshot, DEFAULT_SOURCE_LIMITS, listNavigableSourceFiles, SOURCE_EXTENSIONS } from './source.js';
 import { defaultLanguageRegistry, type LanguageAdapter } from './languages/index.js';
 import { SearchExecutionController, SearchOverloadedError, SearchQueueAbortedError } from './search-execution.js';
 import { GitHubRepositoryAcquirer, GitHubRepositoryError } from './github-repository.js';
 import { EXACT_SEARCH_LIMITS, searchExactText } from './exact-search.js';
 import { SYMBOL_LIMITS, type SourceSymbol } from './symbols.js';
+import { buildRepositoryMap } from './repository-map.js';
 
 const HOST = '127.0.0.1';
 const PORT = Number(process.env['PORT'] ?? 4317);
@@ -287,6 +288,28 @@ async function handleHealth(res: ServerResponse): Promise<void> {
   sendJson(res, 200, { ok: true, service: 'localcode-intelligence', version: '0.1.0' });
 }
 
+async function handleLanguages(res: ServerResponse): Promise<void> {
+  // This route is intentionally metadata-only: no model or parser initialization.
+  sendJson(res, 200, { languages: defaultLanguageRegistry.getAllAdapters().map(adapter => ({
+    id: adapter.id, name: adapter.name, extensions: [...adapter.fileExtensions],
+    capabilities: adapter.capabilities,
+    parserAvailable: adapter.capabilities.structural,
+  })) });
+}
+
+async function handleRepositoryMap(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (!requiresJson(req, res)) return;
+  let body: unknown;
+  try { body = await readJsonBody(req); } catch (error) { sendBodyError(res, error); return; }
+  if (!body || typeof body !== 'object') { sendError(res, 400, 'Request body must be a JSON object'); return; }
+  const repositoryPath = resolvePrepared(body as { repositoryId?: unknown; repositoryPath?: unknown });
+  if (typeof repositoryPath !== 'string' || !repositoryPath.trim()) { sendError(res, 400, 'A prepared repository reference is required.'); return; }
+  const validation = await validateRepositoryDirectory(repositoryPath);
+  if (!validation.ok) { sendJson(res, 200, { ok: false, message: validation.message }); return; }
+  try { sendJson(res, 200, { ok: true, ...(await buildRepositoryMap(validation.resolvedPath)) }); }
+  catch { sendJson(res, 200, { ok: false, message: 'Repository map could not be generated.' }); }
+}
+
 async function handleRepoStatus(req: IncomingMessage, res: ServerResponse): Promise<void> {
   if (!requiresJson(req, res)) return;
   let body: unknown;
@@ -495,20 +518,15 @@ async function handleSymbols(req: IncomingMessage, res: ServerResponse): Promise
   }
 
   try {
-    // Run all structural adapters and aggregate their results.
-    const results = await Promise.all(
-      structuralAdapters.map((a) => a.extractSymbols!(validation.resolvedPath)),
-    );
+    const snapshot = await prepareRepositorySourceSnapshot(validation.resolvedPath);
 
     const symbols: SourceSymbol[] = [];
     let truncated = false;
-    let filesProcessed = 0;
-    let filesDiscovered = 0;
-    const warnings: string[] = [];
+    const warnings: string[] = [...snapshot.scope.warnings];
 
-    for (const result of results) {
-      filesProcessed += result.scope.filesProcessed;
-      filesDiscovered += (result.scope.filesDiscovered ?? result.scope.filesProcessed);
+    for (const adapter of structuralAdapters) {
+      if (!adapter.extractSymbolsFromSnapshot) throw new Error(`Structural adapter ${adapter.id} does not support shared snapshots.`);
+      const result = await adapter.extractSymbolsFromSnapshot(snapshot, SYMBOL_LIMITS.maxSymbols - symbols.length);
       warnings.push(...result.scope.warnings);
       for (const sym of result.symbols) {
         if (symbols.length >= SYMBOL_LIMITS.maxSymbols) { truncated = true; break; }
@@ -521,7 +539,7 @@ async function handleSymbols(req: IncomingMessage, res: ServerResponse): Promise
       warnings.push(`Symbol limit reached (${SYMBOL_LIMITS.maxSymbols}); refine the repository scope to see additional declarations.`);
     }
 
-    sendJson(res, 200, { ok: true, symbols, truncated, scope: { filesProcessed, filesDiscovered, warnings } });
+    sendJson(res, 200, { ok: true, symbols, truncated, scope: { filesProcessed: snapshot.scope.filesProcessed, filesDiscovered: snapshot.scope.filesDiscovered, warnings } });
   } catch {
     sendJson(res, 200, { ok: false, message: 'Symbols could not be read from this repository.' });
   }
@@ -554,7 +572,10 @@ async function handleSymbolUsages(req: IncomingMessage, res: ServerResponse): Pr
   }
 
   try {
-    sendJson(res, 200, { ok: true, ...(await adapter.findPossibleUsages(validation.resolvedPath, selected as never)) });
+    const snapshot = await prepareRepositorySourceSnapshot(validation.resolvedPath);
+    if (!adapter.findPossibleUsagesInSnapshot) throw new Error(`Structural adapter ${adapter.id} does not support shared snapshots.`);
+    const result = await adapter.findPossibleUsagesInSnapshot(snapshot, selected as never);
+    sendJson(res, 200, { ok: true, ...result });
   } catch (error) {
     sendJson(res, 200, { ok: false, message: error instanceof Error ? error.message : 'Possible usages could not be read.' });
   }
@@ -754,6 +775,8 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, performS
       await handleHealth(res);
       return;
     }
+    if (req.method === 'GET' && url === '/api/languages') { await handleLanguages(res); return; }
+    if (req.method === 'POST' && url === '/api/repository/map') { await handleRepositoryMap(req, res); return; }
     if (req.method === 'POST' && url === '/api/repo/status') {
       await handleRepoStatus(req, res);
       return;

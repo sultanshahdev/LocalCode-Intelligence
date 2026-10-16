@@ -2,6 +2,7 @@ import { open, readdir, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { extname, relative, resolve } from 'node:path';
 import { defaultLanguageRegistry, getDefaultLanguageRegistry, type LanguageRegistry } from './languages/index.js';
+import type { LanguageId } from './languages/types.js';
 
 export const DEFAULT_SOURCE_LIMITS = {
   maxFiles: 500,
@@ -51,6 +52,17 @@ export interface SourceLimits {
   maxTotalBytes: number;
   windowLines: number;
   overlapLines: number;
+}
+export interface SourceSnapshotFile { readonly filePath: string; readonly languageId: LanguageId; readonly content: string; readonly bytes: number; }
+export interface RepositorySourceSnapshot { readonly files: readonly SourceSnapshotFile[]; readonly scope: { readonly filesDiscovered: number; readonly filesProcessed: number; readonly totalBytes: number; readonly truncated: boolean; readonly warnings: readonly string[]; }; }
+
+/** One operation-scoped, bounded source read shared by structural consumers. */
+export async function prepareRepositorySourceSnapshot(repositoryPath: string, limits: SourceLimits = DEFAULT_SOURCE_LIMITS, registry: LanguageRegistry = defaultLanguageRegistry): Promise<RepositorySourceSnapshot> {
+  const discovered = await discoverSourceFiles(repositoryPath, limits.maxFiles + 1, registry); const warnings: string[] = []; const filesDiscovered = discovered.length; let truncated = false;
+  if (discovered.length > limits.maxFiles) { discovered.length = limits.maxFiles; truncated = true; warnings.push(`File limit reached (${limits.maxFiles}); some supported files were not processed.`); }
+  const files: SourceSnapshotFile[] = []; let totalBytes = 0;
+  for (const absolutePath of discovered) { const filePath = relative(repositoryPath, absolutePath); const adapter = registry.getByPath(filePath); if (!adapter) continue; try { const size = (await stat(absolutePath)).size; if (size > limits.maxFileBytes) { truncated = true; warnings.push(`Skipped ${filePath}: exceeds ${limits.maxFileBytes} bytes.`); continue; } if (totalBytes + size > limits.maxTotalBytes) { truncated = true; warnings.push(`Source byte limit reached (${limits.maxTotalBytes}); remaining files were not processed.`); break; } const content = await readBoundedSourceFile(absolutePath, limits.maxFileBytes); const bytes = Buffer.byteLength(content); if (bytes > limits.maxFileBytes) { truncated = true; warnings.push(`Skipped ${filePath}: exceeds ${limits.maxFileBytes} bytes.`); continue; } if (totalBytes + bytes > limits.maxTotalBytes) { truncated = true; warnings.push(`Source byte limit reached (${limits.maxTotalBytes}); remaining files were not processed.`); break; } files.push(Object.freeze({ filePath, languageId: adapter.id, content, bytes })); totalBytes += bytes; } catch { truncated = true; warnings.push(`Skipped ${filePath}: file became unavailable during scanning.`); } }
+  return Object.freeze({ files: Object.freeze(files), scope: Object.freeze({ filesDiscovered, filesProcessed: files.length, totalBytes, truncated, warnings: Object.freeze(warnings) }) });
 }
 
 /** Reads an explicitly bounded source scope without following symlinks. */
@@ -110,7 +122,7 @@ export async function prepareSourceScope(
     filesProcessed += 1;
     const adapter = registry.getByPath(displayPath);
     if (adapter?.segmentSource) {
-      regions.push(...adapter.segmentSource(displayPath, content, limits));
+      regions.push(...await adapter.segmentSource(displayPath, content, limits));
     } else {
       regions.push(...segmentSource(displayPath, content, limits));
     }

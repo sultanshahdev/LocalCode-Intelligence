@@ -901,6 +901,11 @@ body {
 .explorer-file:hover, .explorer-file:focus-visible { background:rgba(93, 173, 226, .14); outline:none; }
 .explorer-state { padding:12px; color:var(--muted, #aab7c7); display:flex; gap:8px; align-items:center; }
 .symbol-explorer { margin-top:14px; border:1px solid var(--border); border-radius:10px; background:var(--surface-1); max-height:360px; overflow:auto; }
+.repository-map { margin-top:14px; border:1px solid var(--border); border-radius:10px; background:var(--surface-1); overflow:hidden; }
+.map-canvas { max-height:420px; overflow:auto; padding:8px 0 12px; background:radial-gradient(circle at 10% 10%, rgba(68,102,232,.12), transparent 40%); }
+.map-node { display:flex; align-items:center; gap:8px; min-width:calc(100% - 18px); border:0; border-radius:5px; padding:6px 10px; background:transparent; color:var(--text-1); text-align:left; cursor:pointer; transition:transform .18s, background .18s, box-shadow .18s; }
+.map-node:hover, .map-node:focus-visible { background:rgba(85,119,255,.14); transform:translateX(2px); box-shadow:0 0 0 1px rgba(85,119,255,.35); outline:0; }
+.map-node--directory { color:#9eb5ff; } .map-node small { margin-left:auto; color:var(--text-3); font:10px var(--font-ui); }
 .symbol-explorer .explorer-filter { margin-top:8px; }
 .symbol-help { padding:0 12px; color:var(--text-3); font:11px var(--font-ui); }
 .symbol-kind { min-width:58px; color:var(--accent-hi); font:10px var(--font-ui); text-transform:uppercase; }
