@@ -48,10 +48,10 @@ export function WorkspaceHeader({
 }: WorkspaceHeaderProps) {
   const [prepExpanded, setPrepExpanded] = useState(!repoStatus);
 
-  const tabs: Array<{ id: WorkspaceTab; label: string; icon: React.ReactNode }> = [
+  const tabs: Array<{ id: WorkspaceTab; label: string; ariaLabel?: string; icon: React.ReactNode }> = [
     { id: 'overview', label: 'Overview', icon: <Home size={15} /> },
-    { id: 'search', label: 'Semantic Search', icon: <Search size={15} /> },
-    { id: 'exact', label: 'Exact Text', icon: <SlidersHorizontal size={15} /> },
+    { id: 'search', label: 'Semantic Search', ariaLabel: 'AI / Semantic', icon: <Search size={15} /> },
+    { id: 'exact', label: 'Exact Text', ariaLabel: 'Exact text', icon: <SlidersHorizontal size={15} /> },
     { id: 'symbols', label: 'Symbols', icon: <Code2 size={15} /> },
     { id: 'map', label: 'Repository Map', icon: <Network size={15} /> },
     { id: 'files', label: 'Files', icon: <Folder size={15} /> },
@@ -115,7 +115,7 @@ export function WorkspaceHeader({
               disabled={repoLoading}
               icon={repoLoading ? <Spinner size={12} /> : <RefreshCw size={12} />}
             >
-              Refresh Repo
+              Refresh
             </Button>
           )}
           <button
@@ -138,14 +138,14 @@ export function WorkspaceHeader({
                 className={`prep-type-btn ${sourceType === 'local' ? 'prep-type-btn--active' : ''}`}
                 onClick={() => onChangeSourceType('local')}
               >
-                Local Folder Path
+                Local folder
               </button>
               <button
                 type="button"
                 className={`prep-type-btn ${sourceType === 'github' ? 'prep-type-btn--active' : ''}`}
                 onClick={() => onChangeSourceType('github')}
               >
-                Public GitHub URL
+                GitHub URL
               </button>
             </div>
 
@@ -164,7 +164,7 @@ export function WorkspaceHeader({
                   if (e.key === 'Enter') onPrepareRepo(false);
                 }}
                 spellCheck={false}
-                aria-label="Repository Target"
+                aria-label={sourceType === 'local' ? 'Repository path' : 'Public GitHub repository URL'}
               />
 
               <Button
@@ -177,7 +177,7 @@ export function WorkspaceHeader({
                 {repoLoading
                   ? 'Preparing Source…'
                   : sourceType === 'github'
-                  ? 'Prepare GitHub Repo'
+                  ? 'Prepare repository'
                   : 'Check Repository'}
               </Button>
             </div>
@@ -207,6 +207,7 @@ export function WorkspaceHeader({
                 onClick={() => !isLocked && onSelectTab(t.id)}
                 disabled={isLocked}
                 title={isLocked ? 'Connect a repository first' : t.label}
+                aria-label={t.ariaLabel || t.label}
               >
                 <span className="tab-icon">{t.icon}</span>
                 <span className="tab-label">{t.label}</span>

@@ -75,16 +75,18 @@ export function SearchView({
             className={`search-mode-tab ${searchMode === 'semantic' ? 'search-mode-tab--active' : ''}`}
             onClick={() => onSetSearchMode('semantic')}
             aria-pressed={searchMode === 'semantic'}
+            aria-label="AI / Semantic"
           >
-            Semantic Code Search
+            AI / Semantic
           </button>
           <button
             type="button"
             className={`search-mode-tab ${searchMode === 'exact' ? 'search-mode-tab--active' : ''}`}
             onClick={() => onSetSearchMode('exact')}
             aria-pressed={searchMode === 'exact'}
+            aria-label="Exact text"
           >
-            Exact Text Search
+            Exact text
           </button>
         </div>
 
@@ -105,7 +107,7 @@ export function SearchView({
                 if (e.key === 'Enter') onSearch();
               }}
               spellCheck={false}
-              aria-label="Search Query"
+              aria-label="Search query"
             />
           </div>
 
@@ -148,7 +150,7 @@ export function SearchView({
 
       {/* Loading state indicator */}
       {loading && (
-        <div className="search-loading-banner animate-wf-rise">
+        <div className="search-loading-banner loading-notice animate-wf-rise">
           <Spinner size={18} />
           <div className="search-loading-text">
             <span>
@@ -216,7 +218,7 @@ export function SearchView({
         (semanticResult.outcome === 'no-supported-candidate' ||
           semanticResult.outcome === 'no-relevant-results') && (
           <div className="search-empty-box">
-            <h3 className="empty-title">No relevant code found</h3>
+            <h3 className="empty-title empty-state-title">No relevant code found</h3>
             <p className="empty-desc">
               We couldn’t identify a code region strongly related to your query. Try rephrasing with
               domain actions or programming terms. This does not establish that the behavior is absent.
@@ -225,8 +227,8 @@ export function SearchView({
         )}
 
       {searchMode === 'exact' && exactResult?.ok && (exactResult.matches?.length ?? 0) === 0 && (
-        <div className="search-empty-box">
-          <h3 className="empty-title">No exact text matches</h3>
+          <div className="search-empty-box">
+          <h3 className="empty-title empty-state-title">No exact text matches</h3>
           <p className="empty-desc">
             Try a shorter substring or disable the Case Sensitive or Whole Word options.
           </p>
@@ -241,7 +243,7 @@ export function SearchView({
             const isCopied = copiedId === id;
 
             return (
-              <article key={id} className="candidate-card animate-wf-rise">
+              <article key={id} className="candidate-card card animate-wf-rise">
                 <div className="candidate-header">
                   <div className="candidate-rank">#{idx + 1}</div>
                   <div className="candidate-path-wrap">
@@ -272,6 +274,7 @@ export function SearchView({
                       type="button"
                       className="candidate-btn candidate-btn--primary"
                       onClick={() => onViewSource(c)}
+                      aria-label={`View source for ${c.filePath}`}
                     >
                       <FileCode size={13} />
                       <span>View Source</span>
@@ -283,8 +286,11 @@ export function SearchView({
                         target="_blank"
                         rel="noreferrer"
                         className="candidate-btn"
+                        aria-label="Open on GitHub"
+                        title="Open on GitHub"
                       >
                         <ExternalLink size={13} />
+                        <span>Open on GitHub</span>
                       </a>
                     )}
                   </div>
@@ -320,7 +326,7 @@ export function SearchView({
             match.occurrences.forEach((occ, oIdx) => {
               if (cursor < occ.start) parts.push(match.text.slice(cursor, occ.start));
               parts.push(
-                <mark key={oIdx} className="exact-matched-mark">
+                <mark key={oIdx} className="exact-matched-mark exact-highlight">
                   {match.text.slice(occ.start, occ.end)}
                 </mark>
               );
@@ -329,7 +335,7 @@ export function SearchView({
             if (cursor < match.text.length) parts.push(match.text.slice(cursor));
 
             return (
-              <div key={`${match.filePath}:${match.line}:${idx}`} className="exact-match-row">
+              <div key={`${match.filePath}:${match.line}:${idx}`} className="exact-match-row exact-card">
                 <div className="exact-match-meta">
                   <span className="exact-file-label">{match.filePath}</span>
                   <span className="exact-line-label">:{match.line}</span>
@@ -337,6 +343,7 @@ export function SearchView({
                     type="button"
                     className="exact-view-btn"
                     onClick={() => onViewSource(candidate)}
+                    aria-label={`View source for ${match.filePath} line ${match.line}`}
                   >
                     View Source
                   </button>

@@ -93,7 +93,12 @@ export function SourceInspector({
   };
 
   return (
-    <aside className="workspace-inspector animate-wf-rise" aria-label="Source Inspector">
+    <aside
+      className="workspace-inspector animate-wf-rise"
+      aria-label="Source viewer"
+      role="dialog"
+      aria-modal="true"
+    >
       <div className="inspector-header">
         <div className="inspector-file-info">
           <FileCode size={18} className="inspector-icon" />
@@ -134,7 +139,7 @@ export function SourceInspector({
             className="inspector-close-btn"
             onClick={onClose}
             title="Close Inspector (Esc)"
-            aria-label="Close Source Inspector"
+            aria-label="Close source viewer"
           >
             <X size={16} />
           </button>
@@ -177,7 +182,7 @@ export function SourceInspector({
                   <div
                     key={lineNum}
                     ref={isHighlighted && lineNum === candidate.startLine ? highlightRef : undefined}
-                    className={`inspector-line ${isHighlighted ? 'inspector-line--highlight' : ''}`}
+                    className={`inspector-line ${isHighlighted ? 'inspector-line--highlight sv-line--hl' : ''}`}
                   >
                     <span className="inspector-ln">{lineNum}</span>
                     <span className="inspector-code-text">{line}</span>

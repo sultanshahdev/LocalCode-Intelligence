@@ -80,6 +80,7 @@ export function FileExplorerView({ files, loading, error, onOpen }: FileExplorer
                     className="files-item-btn"
                     onClick={() => onOpen(file)}
                     title={file}
+                    aria-label={file}
                   >
                     <FileCode size={14} color="#9147FF" />
                     <span className="files-item-name">{file.slice(file.lastIndexOf('/') + 1)}</span>

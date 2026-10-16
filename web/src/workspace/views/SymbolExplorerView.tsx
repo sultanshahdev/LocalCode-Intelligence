@@ -129,8 +129,9 @@ export function SymbolExplorerView({
                           className="symbol-find-usages-btn"
                           onClick={() => onUsages(s)}
                           title="Find AST identifier matches"
+                          aria-label={`Find usages for ${s.name}`}
                         >
-                          Usages
+                          Find usages
                         </button>
                       </div>
                     );
@@ -142,11 +143,11 @@ export function SymbolExplorerView({
       </div>
 
       {/* Usages Panel */}
-      <div className="symbols-usages-pane">
+      <div className="symbols-usages-pane usage-panel">
         <div className="usages-header">
           <div className="usages-title-row">
             <CornerDownRight size={16} />
-            <span>Possible Usages</span>
+            <span>Possible usages of {usageSymbol ? usageSymbol.name : 'symbol'}</span>
             {usageSymbol && <span className="usage-symbol-name">{usageSymbol.name}</span>}
           </div>
           <span className="usages-sub-note">

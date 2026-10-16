@@ -101,6 +101,7 @@ export function WorkspacePage({ onReturnToLanding }: WorkspacePageProps) {
     setSearchLoading(false);
     setRepositoryId(undefined);
     setRepoStatus(null);
+    setActiveTab('overview');
     setResolvedPath('');
     setGithubSource(null);
     setSemanticResult(null);
@@ -399,12 +400,14 @@ export function WorkspacePage({ onReturnToLanding }: WorkspacePageProps) {
               caseSensitive={caseSensitive}
               onSetCaseSensitive={(v) => {
                 searchGeneration.current += 1;
+                setSearchLoading(false);
                 setExactResult(null);
                 setCaseSensitive(v);
               }}
               wholeWord={wholeWord}
               onSetWholeWord={(v) => {
                 searchGeneration.current += 1;
+                setSearchLoading(false);
                 setExactResult(null);
                 setWholeWord(v);
               }}
