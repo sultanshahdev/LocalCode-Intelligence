@@ -1,0 +1,51 @@
+import { open, stat } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { relative, dirname, join } from 'node:path';
+import { createRequire } from 'node:module';
+import { Language, Parser, type Node } from 'web-tree-sitter';
+import { DEFAULT_SOURCE_LIMITS, discoverSourceFiles, segmentSource, type SourceLimits, type SourceRegion } from '../source.js';
+import { SYMBOL_LIMITS, type SourceSymbol, type SymbolKind, type SymbolResult, type SymbolUsage, type UsageResult } from '../symbols.js';
+import type { LanguageAdapter, LanguageId } from './types.js';
+import { LanguageRegistry } from './registry.js';
+
+const require = createRequire(import.meta.url);
+const grammarRoot = join(dirname(require.resolve('tree-sitter-wasm')), 'out');
+let initialized: Promise<void> | undefined;
+const languages = new Map<string, Promise<Language>>();
+
+async function grammar(name: string): Promise<Language> {
+  if (!initialized) initialized = Parser.init({ locateFile: () => require.resolve('web-tree-sitter/web-tree-sitter.wasm') });
+  await initialized;
+  let loaded = languages.get(name);
+  if (!loaded) { loaded = Language.load(join(grammarRoot, name, `tree-sitter-${name}.wasm`)); languages.set(name, loaded); }
+  return loaded;
+}
+async function read(path: string, max: number): Promise<string> { const h = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW); try { const b = Buffer.alloc(max + 1); let n = 0; while (n < b.length) { const r = await h.read(b, n, b.length - n, n); if (!r.bytesRead) break; n += r.bytesRead; } return b.subarray(0, n).toString('utf8'); } finally { await h.close(); } }
+const functionNodes = new Set(['function_definition', 'function_declaration', 'function_item', 'method_declaration', 'method_definition', 'function_statement', 'singleton_method', 'method']);
+const classNodes = new Set(['class_definition', 'class_declaration', 'class_specifier', 'class', 'struct_specifier', 'struct_item', 'interface_declaration', 'interface_item', 'trait_item', 'enum_declaration', 'enum_item', 'module', 'namespace_definition', 'module_definition', 'trait_declaration', 'type_spec']);
+function nameOf(node: Node): Node | null { const direct = node.childForFieldName('name') ?? node.children.find(c => /^(identifier|type_identifier|field_identifier|constant|name)$/.test(c.type)); if (direct) return direct; const find = (item: Node): Node | null => { for (const child of item.children) { if (/^(identifier|type_identifier|field_identifier|constant)$/.test(child.type)) return child; const nested = find(child); if (nested) return nested; } return null; }; return find(node); }
+function kindOf(node: Node): SymbolKind | null { if (functionNodes.has(node.type)) return /method|singleton/.test(node.type) ? 'method' : 'function'; if (classNodes.has(node.type)) { if (/interface|trait/.test(node.type)) return 'interface'; if (/enum/.test(node.type)) return 'enum'; return 'class'; } if (/type_definition|type_alias/.test(node.type)) return 'type alias'; return null; }
+function walk(node: Node, visit: (n: Node, container?: string) => void, container?: string): void { visit(node, container); const named = nameOf(node); const own = kindOf(node); const next = own && ['class', 'interface'].includes(own) && named ? named.text : container; for (const child of node.children) walk(child, visit, next); }
+
+export class TreeSitterLanguageAdapter implements LanguageAdapter {
+  readonly capabilities = { basic: true, structural: true, precise: false } as const;
+  private readonly scoped: LanguageRegistry;
+  constructor(readonly id: LanguageId, readonly name: string, readonly fileExtensions: readonly string[], private readonly grammarName: string) { this.scoped = new LanguageRegistry([this]); }
+  async parse(content: string) { const language = await grammar(this.grammarName); const parser = new Parser(); parser.setLanguage(language); const tree = parser.parse(content); if (!tree) { parser.delete(); throw new Error('Tree-sitter parsing was cancelled.'); } return { parser, tree }; }
+  async extractSymbols(repositoryPath: string, limits: SourceLimits = DEFAULT_SOURCE_LIMITS): Promise<SymbolResult> {
+    const files = await discoverSourceFiles(repositoryPath, limits.maxFiles + 1, this.scoped); const warnings: string[] = []; const filesDiscovered = files.length; if (files.length > limits.maxFiles) { files.length = limits.maxFiles; warnings.push(`File limit reached (${limits.maxFiles}); some supported files were not processed.`); }
+    const symbols: SourceSymbol[] = []; let total = 0; let processed = 0; let truncated = false;
+    for (const file of files) { const filePath = relative(repositoryPath, file); try { const size = (await stat(file)).size; if (size > limits.maxFileBytes || total + size > limits.maxTotalBytes) { warnings.push(`Skipped ${filePath}: source limits.`); continue; } const content = await read(file, limits.maxFileBytes); if (Buffer.byteLength(content) > limits.maxFileBytes) { warnings.push(`Skipped ${filePath}: exceeds ${limits.maxFileBytes} bytes.`); continue; } total += Buffer.byteLength(content); processed++; const { parser, tree } = await this.parse(content); if (tree.rootNode.hasError) warnings.push(`Parsed ${filePath} with syntax errors; declarations may be incomplete.`); walk(tree.rootNode, (node, container) => { const baseKind = kindOf(node); const named = nameOf(node); if (!baseKind || !named || symbols.length >= SYMBOL_LIMITS.maxSymbols) return; const kind = container && baseKind === 'function' ? 'method' : baseKind; symbols.push({ filePath, name: named.text, kind, startLine: node.startPosition.row + 1, endLine: Math.max(node.startPosition.row + 1, node.endPosition.row + 1), ...(container ? { containerName: container } : {}) }); }); tree.delete(); parser.delete(); if (symbols.length >= SYMBOL_LIMITS.maxSymbols) { truncated = true; break; } } catch { warnings.push(`Skipped ${filePath}: parser or source unavailable.`); } }
+    if (truncated) warnings.push(`Symbol limit reached (${SYMBOL_LIMITS.maxSymbols}); refine the repository scope to see additional declarations.`); return { symbols, truncated, scope: { filesProcessed: processed, filesDiscovered, warnings } };
+  }
+  async findPossibleUsages(repositoryPath: string, selected: Pick<SourceSymbol, 'filePath' | 'name' | 'kind' | 'startLine'>, limits: SourceLimits = DEFAULT_SOURCE_LIMITS): Promise<UsageResult> {
+    const declarations = await this.extractSymbols(repositoryPath, limits); const symbol = declarations.symbols.find(s => s.filePath === selected.filePath && s.name === selected.name && s.kind === selected.kind && s.startLine === selected.startLine); if (!symbol) throw new Error('The selected declaration no longer exists in this repository.'); const files = await discoverSourceFiles(repositoryPath, limits.maxFiles + 1, this.scoped); const usages: SymbolUsage[] = []; let total = 0; let processed = 0; const warnings = [...declarations.scope.warnings]; let truncated = false;
+    for (const file of files.slice(0, limits.maxFiles)) { const filePath = relative(repositoryPath, file); try { const size = (await stat(file)).size; if (size > limits.maxFileBytes || total + size > limits.maxTotalBytes) continue; const content = await read(file, limits.maxFileBytes); total += Buffer.byteLength(content); processed++; const lines = content.split(/\r?\n/); const declarationColumn = filePath === symbol.filePath ? (lines[symbol.startLine - 1] ?? '').indexOf(symbol.name) : -1; const { parser, tree } = await this.parse(content); walk(tree.rootNode, node => { if (truncated || !/^(identifier|type_identifier|field_identifier|constant|name|word)$/.test(node.type) || node.text !== symbol.name || (filePath === symbol.filePath && node.startPosition.row + 1 === symbol.startLine && node.startPosition.column === declarationColumn)) return; const line = lines[node.startPosition.row] ?? ''; const start = Math.max(0, node.startPosition.column - 120); usages.push({ filePath, line: node.startPosition.row + 1, column: node.startPosition.column + 1, preview: line.slice(start, start + 320), start: node.startPosition.column - start, end: node.endPosition.column - start }); if (usages.length >= 200) truncated = true; }); tree.delete(); parser.delete(); if (truncated) break; } catch { warnings.push(`Skipped ${filePath}: parser or source unavailable.`); } }
+    if (truncated) warnings.push('Usage limit reached (200); results are truncated.'); usages.sort((a, b) => a.filePath.localeCompare(b.filePath) || a.line - b.line || a.column - b.column); return { symbol, usages, truncated, scope: { filesProcessed: processed, filesDiscovered: files.length, warnings } };
+  }
+  async segmentSource(filePath: string, content: string, limits: Pick<SourceLimits, 'windowLines' | 'overlapLines'> = DEFAULT_SOURCE_LIMITS): Promise<SourceRegion[]> { const { parser, tree } = await this.parse(content); const regions: SourceRegion[] = []; walk(tree.rootNode, node => { if (!kindOf(node) || node.endPosition.row - node.startPosition.row + 1 > limits.windowLines) return; regions.push({ filePath, startLine: node.startPosition.row + 1, endLine: Math.max(node.startPosition.row + 1, node.endPosition.row + 1), text: content.slice(node.startIndex, node.endIndex) }); }); tree.delete(); parser.delete(); return regions.length ? regions : segmentSource(filePath, content, limits); }
+}
+
+export const treeSitterAdapters = [
+  new TreeSitterLanguageAdapter('python', 'Python', ['.py', '.pyi'], 'python'), new TreeSitterLanguageAdapter('go', 'Go', ['.go'], 'go'), new TreeSitterLanguageAdapter('java', 'Java', ['.java'], 'java'), new TreeSitterLanguageAdapter('rust', 'Rust', ['.rs'], 'rust'), new TreeSitterLanguageAdapter('c', 'C', ['.c', '.h'], 'c'), new TreeSitterLanguageAdapter('cpp', 'C++', ['.cpp', '.cc', '.cxx', '.hpp', '.hh', '.hxx'], 'cpp'), new TreeSitterLanguageAdapter('csharp', 'C#', ['.cs'], 'c_sharp'), new TreeSitterLanguageAdapter('ruby', 'Ruby', ['.rb'], 'ruby'), new TreeSitterLanguageAdapter('php', 'PHP', ['.php'], 'php'), new TreeSitterLanguageAdapter('bash', 'Bash / Shell', ['.sh', '.bash'], 'bash'),
+] as const;

@@ -28,7 +28,7 @@ export interface LanguageAdapter {
     filePath: string,
     content: string,
     limits?: Pick<SourceLimits, 'windowLines' | 'overlapLines'>,
-  ): SourceRegion[];
+  ): SourceRegion[] | Promise<SourceRegion[]>;
 
   /**
    * Extracts declarations and symbols from repository source files.

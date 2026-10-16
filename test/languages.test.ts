@@ -27,7 +27,7 @@ async function fixture(): Promise<string> {
   return root;
 }
 
-test('Scenario 1 & 2: default registry deterministically detects JS/TS extensions and rejects unsupported', () => {
+test('default registry deterministically detects all production extensions and rejects unsupported', () => {
   const registry = createDefaultLanguageRegistry();
   const supported = ['.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.mts', '.cts'];
 
@@ -38,12 +38,11 @@ test('Scenario 1 & 2: default registry deterministically detects JS/TS extension
     assert.equal(adapter.id, 'javascript-typescript');
   }
 
+  for (const [path, id] of [['script.py', 'python'], ['main.go', 'go'], ['App.java', 'java'], ['lib.rs', 'rust'], ['run.sh', 'bash']] as const) {
+    assert.equal(registry.getByPath(path)?.id, id);
+  }
   // Unsupported extensions return undefined / false
-  assert.equal(registry.isSupported('script.py'), false);
-  assert.equal(registry.isSupported('main.go'), false);
-  assert.equal(registry.isSupported('App.java'), false);
   assert.equal(registry.isSupported('README.md'), false);
-  assert.equal(registry.getByPath('script.py'), undefined);
   assert.equal(registry.getByPath('no_extension'), undefined);
 
   // Extensions match case-insensitively
@@ -141,10 +140,11 @@ test('Scenario 5: source discovery with custom registry discovers only adapter e
   assert.equal(pythonFiles.length, 1);
   assert.match(pythonFiles[0]!, /script\.py$/);
 
-  // Default registry discovers only JS/TS
+  // Default registry discovers all registered language syntaxes
   const defaultFiles = await discoverSourceFiles(root, 10);
-  assert.equal(defaultFiles.length, 1);
-  assert.match(defaultFiles[0]!, /index\.ts$/);
+  assert.equal(defaultFiles.length, 2);
+  assert.ok(defaultFiles.some(file => file.endsWith('index.ts')));
+  assert.ok(defaultFiles.some(file => file.endsWith('script.py')));
 
   // Navigable source files also respect custom registry
   const navListing = await listNavigableSourceFiles(root, 10, pythonRegistry);
@@ -312,10 +312,9 @@ test('Acceptance: mixed-language repo preserves adapter isolation — Python-lik
   // Python-like file with syntax incompatible with TypeScript/JavaScript
   await writeFile(join(root, 'utils.py'), 'def helper():\n    return 42\n');
 
-  // Production registry (JS/TS only) must NOT discover the .py file
+  // Production registry discovers both files, while the TS adapter remains isolated.
   const defaultFiles = await discoverSourceFiles(root, 10);
-  assert.equal(defaultFiles.length, 1, 'default registry discovers only .ts file');
-  assert.ok(defaultFiles[0]!.endsWith('server.ts'));
+  assert.equal(defaultFiles.length, 2);
 
   // JS/TS adapter does not discover the .py file during symbol extraction
   const result = await javaScriptTypeScriptAdapter.extractSymbols!(root);
@@ -325,9 +324,9 @@ test('Acceptance: mixed-language repo preserves adapter isolation — Python-lik
   // No .py file appears in the scope
   assert.equal(result.scope.filesProcessed, 1, 'only one file processed');
 
-  // Registry lookup for .py returns no adapter in production
+  // Registry lookup selects the Python adapter in production.
   const pyAdapter = defaultLanguageRegistry.getByPath('utils.py');
-  assert.equal(pyAdapter, undefined, 'production registry must not resolve a .py adapter');
+  assert.equal(pyAdapter?.id, 'python');
 });
 
 test('Acceptance: unsupported precise navigation returns honest unsupported outcome, not fabricated coordinates', async () => {
@@ -389,13 +388,13 @@ test('Acceptance: segmentation output from adapter and shared function is byte-f
   }
 });
 
-test('Acceptance: SOURCE_EXTENSIONS reflects the default JS/TS registry extensions', () => {
+test('Acceptance: SOURCE_EXTENSIONS reflects the default multilingual registry extensions', () => {
   const supported = ['.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.mts', '.cts'];
   for (const ext of supported) {
     assert.ok(SOURCE_EXTENSIONS.has(ext), `SOURCE_EXTENSIONS should include ${ext}`);
   }
-  assert.ok(!SOURCE_EXTENSIONS.has('.py'), 'SOURCE_EXTENSIONS must not include .py in production');
-  assert.ok(!SOURCE_EXTENSIONS.has('.go'), 'SOURCE_EXTENSIONS must not include .go in production');
+  assert.ok(SOURCE_EXTENSIONS.has('.py'));
+  assert.ok(SOURCE_EXTENSIONS.has('.go'));
 });
 
 test('Acceptance: defaultLanguageRegistry is a stable singleton with correct JS/TS capabilities', () => {
@@ -407,9 +406,8 @@ test('Acceptance: defaultLanguageRegistry is a stable singleton with correct JS/
   // Must support all JS/TS extensions
   assert.ok(r1.isSupported('file.ts'));
   assert.ok(r1.isSupported('file.js'));
-  // Must not support Python or Go
-  assert.ok(!r1.isSupported('file.py'));
-  assert.ok(!r1.isSupported('file.go'));
+  assert.ok(r1.isSupported('file.py'));
+  assert.ok(r1.isSupported('file.go'));
 
   // The JS/TS adapter must have all three capability tiers
   const jstsAdapter = r1.getByPath('file.ts');
@@ -430,7 +428,6 @@ test('Regression: adding another production language does not send its files thr
   const indexUrl = new URL('../src/languages/index.js', import.meta.url).href;
   const script = [
     `import { defaultLanguageRegistry, javaScriptTypeScriptAdapter } from ${JSON.stringify(indexUrl)};`,
-    `defaultLanguageRegistry.register({ id: 'python-test', name: 'Python Test', fileExtensions: ['.py'], capabilities: { basic: true, structural: false, precise: false } });`,
     `const scope = await javaScriptTypeScriptAdapter.extractSymbols(${JSON.stringify(root)});`,
     `if (scope.scope.filesProcessed !== 1 || scope.symbols.some(s => s.filePath.endsWith('.py'))) { console.error(JSON.stringify(scope)); process.exitCode = 2; }`,
   ].join('\n');

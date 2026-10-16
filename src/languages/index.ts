@@ -1,16 +1,18 @@
 import { LanguageRegistry } from './registry.js';
 import { javaScriptTypeScriptAdapter } from './javascript-typescript.js';
+import { treeSitterAdapters } from './tree-sitter.js';
 
 export * from './types.js';
 export * from './registry.js';
 export * from './javascript-typescript.js';
+export * from './tree-sitter.js';
 
 /**
  * Creates a language registry initialized with the standard production language adapters.
  * Each invocation returns a distinct registry instance with no shared mutable state.
  */
 export function createDefaultLanguageRegistry(): LanguageRegistry {
-  return new LanguageRegistry([javaScriptTypeScriptAdapter]);
+  return new LanguageRegistry([javaScriptTypeScriptAdapter, ...treeSitterAdapters]);
 }
 
 let sharedRegistry: LanguageRegistry | undefined;

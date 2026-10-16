@@ -4,7 +4,6 @@ on:
   push:
     branches: [main, feat/github-repositories-and-search-ux]
   pull_request:
-    branches: [main]
   workflow_dispatch:
 
 permissions:

@@ -110,7 +110,7 @@ export async function prepareSourceScope(
     filesProcessed += 1;
     const adapter = registry.getByPath(displayPath);
     if (adapter?.segmentSource) {
-      regions.push(...adapter.segmentSource(displayPath, content, limits));
+      regions.push(...await adapter.segmentSource(displayPath, content, limits));
     } else {
       regions.push(...segmentSource(displayPath, content, limits));
     }
