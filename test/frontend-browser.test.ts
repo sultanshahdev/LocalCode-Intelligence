@@ -24,7 +24,8 @@ describe('Frontend Browser Integration (Playwright)', () => {
 
   test('Code Buster landing page renders its branded investigation hero', async () => {
     const page = await browser.newPage();
-    await page.goto(`${BASE_URL}/`);
+    await page.goto(`${BASE_URL}/`, { waitUntil: 'domcontentloaded' });
+    await page.locator('.cb-landing').waitFor({ state: 'visible' });
 
     // Verify title and main hero copy
     const title = await page.title();
@@ -55,7 +56,8 @@ describe('Frontend Browser Integration (Playwright)', () => {
 
   test('Primary CTA navigates from Landing Page to Workspace at /app', async () => {
     const page = await browser.newPage();
-    await page.goto(`${BASE_URL}/`);
+    await page.goto(`${BASE_URL}/`, { waitUntil: 'domcontentloaded' });
+    await page.locator('.cb-landing').waitFor({ state: 'visible' });
 
     const openWorkspaceBtn = page.getByRole('button', { name: 'Explore a repository' }).first();
     await openWorkspaceBtn.click();
@@ -75,7 +77,8 @@ describe('Frontend Browser Integration (Playwright)', () => {
   test('Landing page keeps the mascot and content available with reduced motion', async () => {
     const page = await browser.newPage();
     await page.emulateMedia({ reducedMotion: 'reduce' });
-    await page.goto(`${BASE_URL}/`);
+    await page.goto(`${BASE_URL}/`, { waitUntil: 'domcontentloaded' });
+    await page.locator('.cb-landing').waitFor({ state: 'visible' });
     assert.ok(await page.locator('.cb-hero h1').isVisible());
     assert.ok(await page.locator('.buster-ghost').first().isVisible());
     assert.equal(await page.locator('.cb-hero-ghost').evaluate((element) => getComputedStyle(element).animationName), 'none');
@@ -84,14 +87,15 @@ describe('Frontend Browser Integration (Playwright)', () => {
 
   test('Direct URL refresh at /app serves Workspace without 404', async () => {
     const page = await browser.newPage();
-    await page.goto(`${BASE_URL}/app`);
+    await page.goto(`${BASE_URL}/app`, { waitUntil: 'domcontentloaded' });
+    await page.locator('.workspace-app-layout').waitFor({ state: 'visible' });
 
     assert.ok(await page.locator('.workspace-app-layout').isVisible());
     // Navigation is intentionally withheld until a repository is prepared.
     assert.equal(await page.locator('.workspace-mode-nav').count(), 0);
     assert.ok(await page.getByText('Start an investigation').isVisible());
 
-    await page.reload();
+    await page.reload({ waitUntil: 'domcontentloaded' });
     assert.ok(await page.locator('.workspace-app-layout').isVisible());
 
     await page.close();
@@ -99,7 +103,8 @@ describe('Frontend Browser Integration (Playwright)', () => {
 
   test('Workspace prepares local repository, runs exact search, and opens Source Inspector', async () => {
     const page = await browser.newPage();
-    await page.goto(`${BASE_URL}/app`);
+    await page.goto(`${BASE_URL}/app`, { waitUntil: 'domcontentloaded' });
+    await page.locator('.workspace-app-layout').waitFor({ state: 'visible' });
 
     // GitHub is the default source; select local explicitly for filesystem paths.
     await page.getByRole('button', { name: 'Local repository' }).click();
@@ -154,10 +159,12 @@ describe('Frontend Browser Integration (Playwright)', () => {
 
     for (const vp of viewports) {
       const page = await browser.newPage({ viewport: { width: vp.width, height: vp.height } });
-      await page.goto(`${BASE_URL}/`);
+      await page.goto(`${BASE_URL}/`, { waitUntil: 'domcontentloaded' });
+    await page.locator('.cb-landing').waitFor({ state: 'visible' });
       assert.ok(await page.locator('.cb-hero h1').isVisible());
 
-      await page.goto(`${BASE_URL}/app`);
+      await page.goto(`${BASE_URL}/app`, { waitUntil: 'domcontentloaded' });
+    await page.locator('.workspace-app-layout').waitFor({ state: 'visible' });
       assert.ok(await page.locator('.workspace-app-layout').isVisible());
       await page.close();
     }

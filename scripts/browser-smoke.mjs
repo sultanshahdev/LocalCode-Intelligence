@@ -26,6 +26,22 @@ let server;
 let browser;
 const pageErrors = [];
 const observed = [];
+
+async function waitForObservedRequest(predicate, description, timeoutMs = 15000) {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    if (observed.some(predicate)) return;
+    await pause(25);
+  }
+
+  assert.fail(
+    `Timed out waiting for ${description}. Recorded endpoints: ${
+      observed.map(item => item.endpoint).join(', ')
+    }`
+  );
+}
+
 async function waitForPreview() {
   for (let i = 0; i < 100; i++) {
     try { if ((await fetch(BASE_URL, { signal: AbortSignal.timeout(700) })).ok) return; } catch {}
@@ -53,6 +69,13 @@ async function run() {
   await page.route('**/api/**', async route => {
     const request = route.request();
     const endpoint = new URL(request.url()).pathname;
+    // Engine selection probes health with GET before any workspace POST. Keep
+    // this explicit: postDataJSON() throws for a request without a body.
+    if (endpoint === '/api/health' && request.method() === 'GET') {
+      observed.push({ endpoint, method: request.method() });
+      observed.push({ endpoint, body: undefined });
+      return reply(route, { ok: true, service: 'localcode-intelligence', version: '0.1.0' });
+    }
     const body = request.postDataJSON();
     observed.push({ endpoint, body });
     if (endpoint === '/api/repositories/prepare') {
@@ -134,15 +157,35 @@ async function run() {
     return reply(route, { error: 'Unexpected API endpoint ' + endpoint }, 404);
   });
 
-  await page.goto(BASE_URL, { waitUntil: 'networkidle' });
+  await page.goto(BASE_URL, {
+    waitUntil: 'domcontentloaded',
+    timeout: 30000
+  });
+  await page.getByRole('button', {
+    name: 'Explore a repository'
+  }).first().waitFor({ timeout: 20000 });
   // Verify Code Buster landing page and open the investigation workspace.
   await page.getByRole('button', { name: 'Explore a repository' }).first().click();
   await page.waitForURL('**/app');
+  const health = await page.evaluate(async () => {
+    const response = await fetch('/api/health', {
+      headers: { Accept: 'application/json' }
+    });
+    return {
+      status: response.status,
+      contentType: response.headers.get('content-type'),
+      body: await response.json()
+    };
+  });
+  assert.equal(health.status, 200);
+  assert.match(health.contentType ?? '', /application\/json/i);
+  assert.equal(health.body.service, 'localcode-intelligence');
+  await page.waitForFunction(() => document.querySelector('.workspace-app-layout') !== null);
   await page.getByRole('button', { name: 'Local repository' }).click();
   await page.getByRole('textbox', { name: 'Repository path' }).fill(LOCAL);
   await page.getByRole('button', { name: 'Explore repository' }).click();
   await workspaceNav().waitFor();
-  assert(observed.some(item => item.endpoint === '/api/repositories/prepare' && item.body.source.type === 'local'));
+  await waitForObservedRequest(item => item.endpoint === '/api/repositories/prepare' && item.body.source.type === 'local', '/api/repositories/prepare');
   await page.getByRole('button', { name: 'Explore' }).click();
   await page.getByRole('button', { name: 'Symbols' }).click();
   await page.getByRole('textbox', { name: 'Filter symbols' }).fill('verify');
@@ -155,14 +198,14 @@ async function run() {
   // Go to Definition workflow: find usages -> go to definition -> source viewer opens
   await page.getByRole('button', { name: 'Find usages' }).first().click();
   await page.getByText('Possible usages of verifyToken').waitFor();
-  assert(observed.some(item => item.endpoint === '/api/symbols/usages' && item.body.repositoryId === 'local-id'));
+  await waitForObservedRequest(item => item.endpoint === '/api/symbols/usages' && item.body.repositoryId === 'local-id', '/api/symbols/usages');
   const defButtons = page.getByRole('button', { name: 'Go to definition' });
   await defButtons.first().click();
   await page.getByRole('complementary', { name: 'Source viewer' }).waitFor();
-  assert(observed.some(item => item.endpoint === '/api/symbols/definition' &&
+  await waitForObservedRequest(item => item.endpoint === '/api/symbols/definition' &&
     item.body.repositoryId === 'local-id' &&
     item.body.filePath === 'src/consumer.ts' &&
-    item.body.line === 10));
+    item.body.line === 10, '/api/symbols/definition');
   await page.getByRole('button', { name: 'Close source viewer' }).click();
   console.log('PASS find usages -> go to definition opens source viewer at declaration');
 
@@ -193,11 +236,23 @@ async function run() {
   await page.getByRole('button', { name: 'Explore' }).click();
   await page.getByRole('button', { name: 'Symbols' }).click();
   await page.getByRole('textbox', { name: 'Filter symbols' }).fill('BigClass');
+  const sourceRequestPromise = page.waitForRequest(
+    request =>
+      new URL(request.url()).pathname === '/api/source' &&
+      request.method() === 'POST' &&
+      request.postDataJSON()?.filePath === 'src/large.ts',
+    { timeout: 15000 }
+  );
+
   await page.getByText('BigClass').last().click();
+
+  const sourceRequest = await sourceRequestPromise;
+  const sourceBody = sourceRequest.postDataJSON();
+
+  assert.equal(sourceBody.startLine, 1);
+  assert.equal(sourceBody.endLine, 26);
+
   await page.getByRole('complementary', { name: 'Source viewer' }).waitFor();
-  assert(observed.some(item => item.endpoint === '/api/source' &&
-    item.body.filePath === 'src/large.ts' &&
-    item.body.startLine === 1 && item.body.endLine === 26));
   await page.getByRole('button', { name: 'Close source viewer' }).click();
   await page.getByRole('textbox', { name: 'Filter symbols' }).fill('');
   console.log('PASS large declaration opens within source-view line cap');
@@ -211,7 +266,7 @@ async function run() {
   await submitSearch().click();
   await page.locator('.card').first().waitFor();
   assert.match(await page.locator('.card').first().innerText(), /auth\.ts/);
-  assert(observed.some(item => item.endpoint === '/api/search' && item.body.repositoryId === 'local-id'));
+  await waitForObservedRequest(item => item.endpoint === '/api/search' && item.body.repositoryId === 'local-id', '/api/search');
   await page.getByRole('button', { name: 'View source for src/auth.ts' }).click();
   await page.getByRole('complementary', { name: 'Source viewer' }).waitFor();
   await page.locator('.sv-line--hl').first().waitFor();
@@ -224,7 +279,7 @@ async function run() {
   await submitSearch().click();
   await page.locator('.exact-card').waitFor();
   assert.equal(await page.locator('.exact-highlight').count(), 2);
-  assert(observed.some(item => item.endpoint === '/api/search/exact' && item.body.wholeWord === true));
+  await waitForObservedRequest(item => item.endpoint === '/api/search/exact' && item.body.wholeWord === true, '/api/search/exact');
   await page.getByRole('button', { name: 'View source for src/auth.ts line 3' }).click();
   await page.getByRole('complementary', { name: 'Source viewer' }).waitFor();
   await page.getByRole('button', { name: 'Close source viewer' }).click();
@@ -279,7 +334,7 @@ async function run() {
   await page.locator('.card').first().waitFor();
   const href = await page.getByRole('link', { name: 'Open on GitHub' }).getAttribute('href');
   assert.equal(href, GITHUB + '/blob/' + REVISION + '/src/search.ts#L12-L14');
-  assert(observed.some(item => item.endpoint === '/api/search' && item.body.repositoryId === 'github-id'));
+  await waitForObservedRequest(item => item.endpoint === '/api/search' && item.body.repositoryId === 'github-id', '/api/search');
   console.log('PASS GitHub prepare, search and pinned source link');
 
   await page.getByRole('button', { name: 'Refresh' }).click();

@@ -55,3 +55,5 @@ jobs:
         run: npm run build:frontend
       - name: Test UI with controlled API responses
         run: node scripts/browser-smoke.mjs
+      - name: Test static browser-native GitHub analysis
+        run: node scripts/browser-native-smoke.mjs
