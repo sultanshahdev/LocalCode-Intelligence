@@ -53,6 +53,13 @@ async function run() {
   await page.route('**/api/**', async route => {
     const request = route.request();
     const endpoint = new URL(request.url()).pathname;
+    // Engine selection probes health with GET before any workspace POST. Keep
+    // this explicit: postDataJSON() throws for a request without a body.
+    if (endpoint === '/api/health' && request.method() === 'GET') {
+      observed.push({ endpoint, method: request.method() });
+      observed.push({ endpoint, body: undefined });
+      return reply(route, { ok: true, service: 'localcode-intelligence', version: '0.1.0' });
+    }
     const body = request.postDataJSON();
     observed.push({ endpoint, body });
     if (endpoint === '/api/repositories/prepare') {
@@ -134,10 +141,30 @@ async function run() {
     return reply(route, { error: 'Unexpected API endpoint ' + endpoint }, 404);
   });
 
-  await page.goto(BASE_URL, { waitUntil: 'networkidle' });
+  await page.goto(BASE_URL, {
+    waitUntil: 'domcontentloaded',
+    timeout: 30000
+  });
+  await page.getByRole('button', {
+    name: 'Explore a repository'
+  }).first().waitFor({ timeout: 20000 });
   // Verify Code Buster landing page and open the investigation workspace.
   await page.getByRole('button', { name: 'Explore a repository' }).first().click();
   await page.waitForURL('**/app');
+  const health = await page.evaluate(async () => {
+    const response = await fetch('/api/health', {
+      headers: { Accept: 'application/json' }
+    });
+    return {
+      status: response.status,
+      contentType: response.headers.get('content-type'),
+      body: await response.json()
+    };
+  });
+  assert.equal(health.status, 200);
+  assert.match(health.contentType ?? '', /application\/json/i);
+  assert.equal(health.body.service, 'localcode-intelligence');
+  await page.waitForFunction(() => document.querySelector('.workspace-app-layout') !== null);
   await page.getByRole('button', { name: 'Local repository' }).click();
   await page.getByRole('textbox', { name: 'Repository path' }).fill(LOCAL);
   await page.getByRole('button', { name: 'Explore repository' }).click();
@@ -193,11 +220,23 @@ async function run() {
   await page.getByRole('button', { name: 'Explore' }).click();
   await page.getByRole('button', { name: 'Symbols' }).click();
   await page.getByRole('textbox', { name: 'Filter symbols' }).fill('BigClass');
+  const sourceRequestPromise = page.waitForRequest(
+    request =>
+      new URL(request.url()).pathname === '/api/source' &&
+      request.method() === 'POST' &&
+      request.postDataJSON()?.filePath === 'src/large.ts',
+    { timeout: 15000 }
+  );
+
   await page.getByText('BigClass').last().click();
+
+  const sourceRequest = await sourceRequestPromise;
+  const sourceBody = sourceRequest.postDataJSON();
+
+  assert.equal(sourceBody.startLine, 1);
+  assert.equal(sourceBody.endLine, 26);
+
   await page.getByRole('complementary', { name: 'Source viewer' }).waitFor();
-  assert(observed.some(item => item.endpoint === '/api/source' &&
-    item.body.filePath === 'src/large.ts' &&
-    item.body.startLine === 1 && item.body.endLine === 26));
   await page.getByRole('button', { name: 'Close source viewer' }).click();
   await page.getByRole('textbox', { name: 'Filter symbols' }).fill('');
   console.log('PASS large declaration opens within source-view line cap');
