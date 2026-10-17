@@ -31,6 +31,7 @@ interface SearchViewProps {
   semanticResult: SearchResponse | null;
   exactResult: ExactSearchResponse | null;
   onViewSource: (c: SearchCandidate) => void;
+  activeCandidate?: SearchCandidate | null;
   githubUrl?: string;
   revision?: string;
 }
@@ -50,6 +51,7 @@ export function SearchView({
   semanticResult,
   exactResult,
   onViewSource,
+  activeCandidate,
   githubUrl,
   revision,
 }: SearchViewProps) {
@@ -75,9 +77,9 @@ export function SearchView({
             className={`search-mode-tab ${searchMode === 'semantic' ? 'search-mode-tab--active' : ''}`}
             onClick={() => onSetSearchMode('semantic')}
             aria-pressed={searchMode === 'semantic'}
-            aria-label="AI / Semantic"
+            aria-label="By meaning"
           >
-            AI / Semantic
+            By meaning
           </button>
           <button
             type="button"
@@ -94,6 +96,7 @@ export function SearchView({
           <div className="search-input-container">
             <Search size={18} className="search-input-icon" />
             <input
+              id="cb-investigation-query"
               type="text"
               className="search-main-input"
               placeholder={
@@ -243,7 +246,7 @@ export function SearchView({
             const isCopied = copiedId === id;
 
             return (
-              <article key={id} className="candidate-card card animate-wf-rise">
+              <article key={id} className={`candidate-card card animate-wf-rise cb-result-row ${activeCandidate?.filePath === c.filePath && activeCandidate?.startLine === c.startLine ? 'is-selected' : ''}`} tabIndex={0} onClick={() => onViewSource(c)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onViewSource(c); } }}>
                 <div className="candidate-header">
                   <div className="candidate-rank">#{idx + 1}</div>
                   <div className="candidate-path-wrap">
@@ -263,7 +266,7 @@ export function SearchView({
                     <button
                       type="button"
                       className="candidate-btn"
-                      onClick={() => copyPath(`${c.filePath}:${c.startLine}-${c.endLine}`, id)}
+                      onClick={(event) => { event.stopPropagation(); copyPath(`${c.filePath}:${c.startLine}-${c.endLine}`, id); }}
                       title="Copy location"
                     >
                       {isCopied ? <Check size={13} color="#22C55E" /> : <Copy size={13} />}
@@ -273,7 +276,7 @@ export function SearchView({
                     <button
                       type="button"
                       className="candidate-btn candidate-btn--primary"
-                      onClick={() => onViewSource(c)}
+                      onClick={(event) => { event.stopPropagation(); onViewSource(c); }}
                       aria-label={`View source for ${c.filePath}`}
                     >
                       <FileCode size={13} />
@@ -335,7 +338,7 @@ export function SearchView({
             if (cursor < match.text.length) parts.push(match.text.slice(cursor));
 
             return (
-              <div key={`${match.filePath}:${match.line}:${idx}`} className="exact-match-row exact-card">
+              <div key={`${match.filePath}:${match.line}:${idx}`} className={`exact-match-row exact-card ${activeCandidate?.filePath === match.filePath && activeCandidate?.startLine === match.line ? 'is-selected' : ''}`}>
                 <div className="exact-match-meta">
                   <span className="exact-file-label">{match.filePath}</span>
                   <span className="exact-line-label">:{match.line}</span>
