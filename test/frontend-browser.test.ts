@@ -22,30 +22,25 @@ describe('Frontend Browser Integration (Playwright)', () => {
     if (server) await new Promise<void>((res) => server.close(() => res()));
   });
 
-  test('Landing page renders with Kiro-inspired hero and navigation', async () => {
+  test('Code Buster landing page renders its branded investigation hero', async () => {
     const page = await browser.newPage();
     await page.goto(`${BASE_URL}/`);
 
     // Verify title and main hero copy
     const title = await page.title();
-    assert.match(title, /LocalCode Intelligence/);
+    assert.match(title, /Code Buster/);
 
-    const headline = await page.locator('.landing-hero-title').textContent();
-    assert.match(headline ?? '', /Understand any codebase/);
-    assert.match(headline ?? '', /Follow the evidence/);
+    const headline = await page.locator('.cb-hero h1').textContent();
+    assert.match(headline ?? '', /Every codebase/);
+    assert.match(headline ?? '', /has a mystery/);
+    assert.ok(await page.locator('.buster-ghost').count() >= 1);
 
     // Verify Primary and Secondary CTAs
-    const openWorkspaceBtn = page.locator('.landing-hero-actions button').first();
-    assert.equal(await openWorkspaceBtn.textContent(), 'Open Workspace');
+    const openWorkspaceBtn = page.getByRole('button', { name: 'Explore a repository' }).first();
+    assert.match(await openWorkspaceBtn.textContent() ?? '', /Explore a repository/);
 
-    // Verify Hero Interactive Demo is present and advancing
-    const demo = page.locator('.hero-demo-showcase');
-    assert.equal(await demo.count(), 1);
-
-    // Verify FAQ accordion expands and collapses
-    const secondFaqItem = page.locator('.faq-item').nth(1);
-    await secondFaqItem.locator('.faq-question').click();
-    assert.ok(await secondFaqItem.locator('.faq-answer').isVisible());
+    assert.equal(await page.locator('.cb-trail-stage').count(), 1);
+    assert.equal(await page.locator('.cb-map-illustration').count(), 1);
 
     await page.close();
   });
@@ -54,7 +49,7 @@ describe('Frontend Browser Integration (Playwright)', () => {
     const page = await browser.newPage();
     await page.goto(`${BASE_URL}/`);
 
-    const openWorkspaceBtn = page.locator('.landing-nav-actions .kiro-btn--primary');
+    const openWorkspaceBtn = page.getByRole('button', { name: 'Explore a repository' }).first();
     await openWorkspaceBtn.click();
 
     // Verify URL changed to /app
@@ -64,8 +59,18 @@ describe('Frontend Browser Integration (Playwright)', () => {
     // Verify return button navigates back to landing
     await page.locator('.workspace-back-btn').click();
     assert.equal(page.url(), `${BASE_URL}/`);
-    assert.ok(await page.locator('.landing-page-root').isVisible());
+    assert.ok(await page.locator('.cb-landing').isVisible());
 
+    await page.close();
+  });
+
+  test('Landing page keeps the mascot and content available with reduced motion', async () => {
+    const page = await browser.newPage();
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.goto(`${BASE_URL}/`);
+    assert.ok(await page.locator('.cb-hero h1').isVisible());
+    assert.ok(await page.locator('.buster-ghost').first().isVisible());
+    assert.equal(await page.locator('.cb-hero-ghost').evaluate((element) => getComputedStyle(element).animationName), 'none');
     await page.close();
   });
 
@@ -98,8 +103,9 @@ describe('Frontend Browser Integration (Playwright)', () => {
     // Wait for repository ready badge
     await page.waitForSelector('.repo-badge-status--ready', { timeout: 10000 });
 
-    // Navigate to Exact Text Tab
-    await page.locator('.workspace-tab-btn', { hasText: 'Exact Text' }).click();
+    // Exact text is a contextual mode of the unified Investigation surface.
+    await page.getByRole('button', { name: 'AI / Semantic' }).click();
+    await page.locator('.search-mode-tab[aria-label="Exact text"]').click();
 
     // Search for a known identifier in this repo
     const searchInput = page.locator('.search-main-input');
@@ -136,7 +142,7 @@ describe('Frontend Browser Integration (Playwright)', () => {
     for (const vp of viewports) {
       const page = await browser.newPage({ viewport: { width: vp.width, height: vp.height } });
       await page.goto(`${BASE_URL}/`);
-      assert.ok(await page.locator('.landing-hero-title').isVisible());
+      assert.ok(await page.locator('.cb-hero h1').isVisible());
 
       await page.goto(`${BASE_URL}/app`);
       assert.ok(await page.locator('.workspace-app-layout').isVisible());

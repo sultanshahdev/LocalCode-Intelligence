@@ -94,7 +94,7 @@ export function SourceInspector({
 
   return (
     <aside
-      className="workspace-inspector animate-wf-rise"
+      className="workspace-inspector workspace-evidence-inspector animate-wf-rise"
       aria-label="Source viewer"
       role="dialog"
       aria-modal="true"

@@ -8,11 +8,11 @@ import {
   Code2,
   Network,
   Folder,
-  SlidersHorizontal,
   Home,
   ArrowLeft,
 } from 'lucide-react';
-import { LocalCodeLogo, Button, Spinner } from '../../components/ui/Primitives';
+import { Button, Spinner } from '../../components/ui/Primitives';
+import { CodeBusterWordmark } from '../../brand/CodeBusterWordmark';
 import { type RepoStatus } from '../../api';
 
 export type WorkspaceTab = 'overview' | 'search' | 'exact' | 'symbols' | 'map' | 'files';
@@ -49,16 +49,15 @@ export function WorkspaceHeader({
   const [prepExpanded, setPrepExpanded] = useState(!repoStatus);
 
   const tabs: Array<{ id: WorkspaceTab; label: string; ariaLabel?: string; icon: React.ReactNode }> = [
-    { id: 'overview', label: 'Overview', icon: <Home size={15} /> },
-    { id: 'search', label: 'Semantic Search', ariaLabel: 'AI / Semantic', icon: <Search size={15} /> },
-    { id: 'exact', label: 'Exact Text', ariaLabel: 'Exact text', icon: <SlidersHorizontal size={15} /> },
+    { id: 'overview', label: 'Start', icon: <Home size={15} /> },
+    { id: 'search', label: 'Investigate', ariaLabel: 'AI / Semantic', icon: <Search size={15} /> },
+    { id: 'files', label: 'Explore files', ariaLabel: 'Files', icon: <Folder size={15} /> },
     { id: 'symbols', label: 'Symbols', icon: <Code2 size={15} /> },
-    { id: 'map', label: 'Repository Map', icon: <Network size={15} /> },
-    { id: 'files', label: 'Files', icon: <Folder size={15} /> },
+    { id: 'map', label: 'Repository map', icon: <Network size={15} /> },
   ];
 
   return (
-    <header className="workspace-header-root">
+    <header className="workspace-header-root workspace-command-shell">
       {/* Top Application Bar */}
       <div className="workspace-top-bar">
         <div className="workspace-brand-group">
@@ -72,11 +71,7 @@ export function WorkspaceHeader({
             <span>Product Page</span>
           </button>
 
-          <div className="workspace-brand">
-            <LocalCodeLogo size={24} />
-            <span className="workspace-brand-title">LocalCode</span>
-            <span className="workspace-brand-env">Workspace</span>
-          </div>
+          <div className="workspace-brand"><CodeBusterWordmark compact /><span className="workspace-brand-env">investigation desk</span></div>
         </div>
 
         {/* Repository status badge in top bar */}

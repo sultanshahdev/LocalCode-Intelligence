@@ -66,7 +66,7 @@ export function SearchView({
   const hasExactResults = !!(exactResult?.ok && (exactResult.matches?.length ?? 0) > 0);
 
   return (
-    <div className="workspace-search-flow">
+    <div className="workspace-search-flow workspace-investigation-surface">
       {/* Search Input Bar */}
       <div className="search-control-bar">
         <div className="search-mode-selector" role="group" aria-label="Search Mode">

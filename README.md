@@ -1,12 +1,12 @@
-# LocalCode Intelligence
+# Code Buster
 
-A local-first semantic and exact-text code search tool for JavaScript and TypeScript repositories.
+A local-first repository investigation tool for JavaScript and TypeScript repositories. **Find the code behind the behavior.**
 Runs entirely on your machine — no cloud, no telemetry, no authentication, no persistent index.
 
 ---
 
 <!-- Screenshot placeholder: replace with an actual screenshot of the web UI -->
-<!-- ![LocalCode Intelligence UI](docs/screenshot.png) -->
+<!-- ![Code Buster UI](docs/screenshot.png) -->
 
 ---
 
@@ -91,20 +91,20 @@ Open **http://127.0.0.1:4317** in your browser.
 
 ## CLI
 
-The original command-line interface is preserved:
+Use the preferred `codebuster` command. The historical `localcode` command remains a compatibility alias:
 
 ```bash
 # Build first
 npm run build:backend
 
 # Validate a repository path
-node dist/src/cli.js repo check /path/to/repo
+codebuster repo check /path/to/repo
 
 # Inspect repository source coverage
-node dist/src/cli.js repo status /path/to/repo
+codebuster repo status /path/to/repo
 
 # Run a semantic search
-node dist/src/cli.js search "your query" --repo /path/to/repo
+codebuster search "your query" --repo /path/to/repo
 ```
 
 ---

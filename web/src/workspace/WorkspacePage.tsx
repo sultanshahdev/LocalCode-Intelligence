@@ -395,7 +395,7 @@ export function WorkspacePage({ onReturnToLanding }: WorkspacePageProps) {
                 setExactResult(null);
                 setSearchError(null);
                 setSearchMode(m);
-                setActiveTab(m === 'exact' ? 'exact' : 'search');
+                setActiveTab('search');
               }}
               caseSensitive={caseSensitive}
               onSetCaseSensitive={(v) => {

@@ -1,9 +1,10 @@
 {
-  "name": "localcode-intelligence",
+  "name": "code-buster",
   "version": "0.1.0",
-  "description": "Local-first source repository investigation — CLI + full-stack web UI",
+  "description": "Code Buster — local-first source repository investigation",
   "type": "module",
   "bin": {
+    "codebuster": "dist/src/cli.js",
     "localcode": "dist/src/cli.js"
   },
   "files": [
@@ -20,7 +21,8 @@
     "dev": "npm run build:backend && concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
     "start": "npm run build && node dist/src/server.js",
     "test": "npm run build:backend && node --test dist/test/**/*.test.js",
-    "localcode": "npm run build:backend --silent && node dist/src/cli.js"
+    "codebuster": "npm run build:backend --silent && node dist/src/cli.js",
+    "localcode": "npm run codebuster"
   },
   "engines": {
     "node": ">=20"
