@@ -169,9 +169,9 @@ The **landing page and illustrative product demos** can be hosted on Cloudflare 
 | Build command | `npm run build` |
 | Output directory | `dist` |
 
-**Important:** Deploying only `web/dist` publishes a static frontend. The current repository loading, source reading, symbol navigation, and semantic/exact search features call the Node server's `/api` routes, which **do not run on static Cloudflare Pages**.
+Cloudflare Pages uses the browser-native execution engine when a validated local `/api/health` response is unavailable. It fetches public GitHub metadata and a pinned commit tree directly from GitHub, then keeps a bounded in-memory snapshot (500 source files, 256 KiB/file, 5 MiB aggregate). Exact search, source inspection, file exploration, the map, basic JS/TS declarations, possible lexical usages, and browser-side semantic retrieval are available without a Code Buster server or credentials. The embedding worker and its inference runtime are lazy-loaded only when semantic search is used.
 
-A future browser-native engine (for example, browser-side repository acquisition, WASM parsing, and Transformers.js inference) would be required before the complete workspace can run on static hosting at no server cost. Until implemented and verified, treat a Pages deployment as a **product website/demo, not a working public repository-search service**. Do not expose the existing localhost API to the internet as a workaround.
+Static hosting cannot access a visitor's local filesystem. The Local repository option therefore reports that it requires the localhost Code Buster application. Do not expose the existing localhost API to the internet as a workaround.
 
 ## Development checks
 
