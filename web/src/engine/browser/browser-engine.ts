@@ -54,7 +54,8 @@ async function prepare(value: string, signal?: AbortSignal): Promise<Snapshot> {
   const tree = await github<{ tree: Array<{ path: string; type: string; size?: number }>; truncated?: boolean }>(`/repos/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repo)}/git/trees/${commit.sha}?recursive=1`, signal);
   const warnings: string[] = []; if (tree.truncated) warnings.push('GitHub returned a truncated file tree; coverage is partial.');
   const eligibleFiles = tree.tree.filter(entry => entry.type === 'blob' && eligible(entry.path)).sort((a, b) => a.path.localeCompare(b.path));
-  const selected = eligibleFiles.slice(0, LIMITS.files); if (eligibleFiles.length > LIMITS.files) warnings.push(`File limit reached (${LIMITS.files}); remaining supported files were not downloaded.`);
+  const selected: Array<{ path: string; type: string; size?: number }> = []; let declaredTotal = 0;
+  for (const entry of eligibleFiles) { if (selected.length >= LIMITS.files) { warnings.push(`File limit reached (${LIMITS.files}); remaining supported files were not downloaded.`); break; } if ((entry.size ?? 0) > LIMITS.fileBytes) { warnings.push(`Skipped ${entry.path}: exceeds ${LIMITS.fileBytes} bytes.`); continue; } if (declaredTotal + (entry.size ?? 0) > LIMITS.totalBytes) { warnings.push(`Source byte limit reached (${LIMITS.totalBytes}); remaining files were not downloaded.`); break; } selected.push(entry); declaredTotal += entry.size ?? 0; }
   let total = 0; const files: File[] = [];
   await concurrent(selected, async entry => {
     if ((entry.size ?? 0) > LIMITS.fileBytes) { warnings.push(`Skipped ${entry.path}: exceeds ${LIMITS.fileBytes} bytes.`); return; }
