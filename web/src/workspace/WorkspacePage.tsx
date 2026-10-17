@@ -1,4 +1,5 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
+import './workspace-redesign.css';
 import {
   apiPrepareRepository,
   apiSearch,
@@ -34,7 +35,7 @@ export function WorkspacePage({ onReturnToLanding }: WorkspacePageProps) {
 
   // Repository State
   const [repoPath, setRepoPath] = useState('');
-  const [sourceType, setSourceType] = useState<'local' | 'github'>('local');
+  const [sourceType, setSourceType] = useState<'local' | 'github'>('github');
   const [repositoryId, setRepositoryId] = useState<string | undefined>();
   const [githubSource, setGithubSource] = useState<{ url: string; revision: string } | null>(null);
   const repositoryGeneration = useRef(0);
@@ -82,6 +83,20 @@ export function WorkspacePage({ onReturnToLanding }: WorkspacePageProps) {
   const [usagesWarnings, setUsagesWarnings] = useState<string[]>([]);
   const [definitionLoading, setDefinitionLoading] = useState<string | null>(null);
   const [definitionMessage, setDefinitionMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    const focusSearch = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const editing = target?.matches('input, textarea, select, [contenteditable="true"]');
+      if (editing || !repoStatus) return;
+      if (event.key === '/' || ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k')) {
+        event.preventDefault();
+        document.getElementById('cb-investigation-query')?.focus();
+      }
+    };
+    window.addEventListener('keydown', focusSearch);
+    return () => window.removeEventListener('keydown', focusSearch);
+  }, [repoStatus]);
 
   // Invalidate when switching repo
   const invalidateRepository = () => {
@@ -140,6 +155,7 @@ export function WorkspacePage({ onReturnToLanding }: WorkspacePageProps) {
       setRepoError(null);
 
       if (!refresh) {
+        setActiveTab('overview');
         searchGeneration.current += 1;
         setSearchLoading(false);
         setRepoStatus(null);
@@ -168,6 +184,7 @@ export function WorkspacePage({ onReturnToLanding }: WorkspacePageProps) {
             setActiveCandidate(null);
           }
           setRepoStatus(result.status);
+          setActiveTab('search');
           const targetPath = result.source?.label ?? result.resolvedPath ?? path;
           setResolvedPath(targetPath);
           setRepositoryId(result.repositoryId);
@@ -338,7 +355,7 @@ export function WorkspacePage({ onReturnToLanding }: WorkspacePageProps) {
   };
 
   return (
-    <div className="workspace-app-layout">
+    <div className="workspace-app-layout cb-workspace">
       {/* Workspace App Shell Header & Navigation */}
       <WorkspaceHeader
         repoPath={repoPath}
@@ -362,11 +379,13 @@ export function WorkspacePage({ onReturnToLanding }: WorkspacePageProps) {
       />
 
       {/* Main Workspace Body */}
-      <main className="workspace-main-area">
+      <main className={`workspace-main-area cb-workspace-main ${activeCandidate ? 'cb-workspace-main--inspecting' : ''}`}>
         <div className="workspace-content-pane">
           {activeTab === 'overview' && (
             <OverviewView
               repoStatus={repoStatus}
+              loading={repoLoading}
+              repositoryName={repoPath}
               resolvedPath={resolvedPath}
               filesCount={files.length}
               symbolsCount={symbols.length}
@@ -427,6 +446,7 @@ export function WorkspacePage({ onReturnToLanding }: WorkspacePageProps) {
               semanticResult={semanticResult}
               exactResult={exactResult}
               onViewSource={setActiveCandidate}
+              activeCandidate={activeCandidate}
               githubUrl={githubSource?.url}
               revision={githubSource?.revision}
             />
@@ -500,6 +520,7 @@ export function WorkspacePage({ onReturnToLanding }: WorkspacePageProps) {
                   score: 0,
                 })
               }
+              onOpenSymbols={() => setActiveTab('symbols')}
             />
           )}
         </div>

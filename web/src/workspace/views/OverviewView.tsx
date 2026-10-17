@@ -16,6 +16,8 @@ import { BusterGhost } from '../../brand/BusterGhost';
 
 interface OverviewViewProps {
   repoStatus: RepoStatus | null;
+  loading?: boolean;
+  repositoryName?: string;
   resolvedPath: string;
   filesCount: number;
   symbolsCount: number;
@@ -25,6 +27,8 @@ interface OverviewViewProps {
 
 export function OverviewView({
   repoStatus,
+  loading = false,
+  repositoryName,
   resolvedPath,
   filesCount,
   symbolsCount,
@@ -35,11 +39,7 @@ export function OverviewView({
     return (
       <div className="overview-unprepared-state workspace-onboarding-card">
         <BusterGhost className="overview-buster" />
-        <h3 className="overview-title">What are we investigating?</h3>
-        <p className="overview-subtitle">
-          Start with a public GitHub URL above, or open a local directory when Code Buster is running on your machine.
-        </p>
-        <p className="overview-subtitle overview-subtitle--quiet">Repository contents are read locally. Search results remain inspectable source evidence.</p>
+        {loading ? <><span className="cb-loading-eyebrow">Preparing {repositoryName || 'repository'}</span><h3 className="overview-title">Following the trail…</h3><p className="overview-subtitle">Connecting to the repository and preparing source information.</p><span className="cb-loading-line" /></> : <><h3 className="overview-title">What are we investigating today?</h3><p className="overview-subtitle">Open a repository. Find the implementation. Follow the evidence.</p><p className="overview-subtitle overview-subtitle--quiet">Start with a GitHub URL above, or choose a local repository running on this machine.</p></>}
       </div>
     );
   }

@@ -39,7 +39,15 @@ describe('Frontend Browser Integration (Playwright)', () => {
     const openWorkspaceBtn = page.getByRole('button', { name: 'Explore a repository' }).first();
     assert.match(await openWorkspaceBtn.textContent() ?? '', /Explore a repository/);
 
-    assert.equal(await page.locator('.cb-trail-stage').count(), 1);
+    // The redesigned landing page teaches the investigation workflow through
+    // three interactive evidence demonstrations.
+    assert.equal(await page.locator('.cb-payment-stage').count(), 1);
+    assert.equal(await page.locator('.cb-session-story').count(), 1);
+    assert.equal(await page.locator('.cb-webhook-story').count(), 1);
+    await page.getByRole('button', { name: /payment-worker\.ts/ }).click();
+    assert.match(await page.locator('.cb-payment-code header').textContent() ?? '', /payment-worker\.ts/);
+    await page.getByRole('button', { name: /HTTP endpoint/ }).click();
+    assert.match(await page.locator('.cb-webhook-detail h3').textContent() ?? '', /HTTP handler/);
     assert.equal(await page.locator('.cb-map-illustration').count(), 1);
 
     await page.close();
@@ -79,7 +87,9 @@ describe('Frontend Browser Integration (Playwright)', () => {
     await page.goto(`${BASE_URL}/app`);
 
     assert.ok(await page.locator('.workspace-app-layout').isVisible());
-    assert.ok(await page.locator('.workspace-mode-nav').isVisible());
+    // Navigation is intentionally withheld until a repository is prepared.
+    assert.equal(await page.locator('.workspace-mode-nav').count(), 0);
+    assert.ok(await page.getByText('Start an investigation').isVisible());
 
     await page.reload();
     assert.ok(await page.locator('.workspace-app-layout').isVisible());
@@ -91,20 +101,23 @@ describe('Frontend Browser Integration (Playwright)', () => {
     const page = await browser.newPage();
     await page.goto(`${BASE_URL}/app`);
 
+    // GitHub is the default source; select local explicitly for filesystem paths.
+    await page.getByRole('button', { name: 'Local repository' }).click();
+
     // Input current repository path
     const repoInput = page.locator('.prep-input-field');
     const targetPath = resolve(process.cwd());
     await repoInput.fill(targetPath);
 
-    // Click Check Repository
-    const prepareBtn = page.locator('.prep-input-row .kiro-btn--primary');
-    await prepareBtn.click();
+    await page.getByRole('button', { name: 'Explore repository' }).click();
 
-    // Wait for repository ready badge
-    await page.waitForSelector('.repo-badge-status--ready', { timeout: 10000 });
+    // Readiness is represented by the prepared repository switcher and
+    // navigation, rather than the removed status badge.
+    await page.getByRole('button', { name: /Ready/ }).waitFor({ timeout: 10000 });
+    await page.getByRole('navigation', { name: 'Workspace navigation' }).waitFor();
 
     // Exact text is a contextual mode of the unified Investigation surface.
-    await page.getByRole('button', { name: 'AI / Semantic' }).click();
+    await page.getByRole('navigation', { name: 'Workspace navigation' }).getByRole('button', { name: 'Search' }).click();
     await page.locator('.search-mode-tab[aria-label="Exact text"]').click();
 
     // Search for a known identifier in this repo

@@ -46,6 +46,9 @@ async function run() {
 
   browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
+  page.setDefaultTimeout(5_000);
+  const workspaceNav = () => page.getByRole('navigation', { name: 'Workspace navigation' });
+  const submitSearch = () => page.locator('.search-input-row').getByRole('button', { name: 'Search', exact: true });
   page.on('pageerror', error => pageErrors.push(String(error)));
   await page.route('**/api/**', async route => {
     const request = route.request();
@@ -135,14 +138,17 @@ async function run() {
   // Verify Code Buster landing page and open the investigation workspace.
   await page.getByRole('button', { name: 'Explore a repository' }).first().click();
   await page.waitForURL('**/app');
+  await page.getByRole('button', { name: 'Local repository' }).click();
   await page.getByRole('textbox', { name: 'Repository path' }).fill(LOCAL);
-  await page.getByRole('button', { name: 'Check Repository' }).click();
-  await page.getByText('Ready for Search').waitFor();
+  await page.getByRole('button', { name: 'Explore repository' }).click();
+  await workspaceNav().waitFor();
+  assert(observed.some(item => item.endpoint === '/api/repositories/prepare' && item.body.source.type === 'local'));
+  await page.getByRole('button', { name: 'Explore' }).click();
   await page.getByRole('button', { name: 'Symbols' }).click();
   await page.getByRole('textbox', { name: 'Filter symbols' }).fill('verify');
   await page.getByText('verifyToken').last().waitFor();
   await page.getByText('verifyToken').last().click();
-  await page.getByRole('dialog', { name: 'Source viewer' }).waitFor();
+  await page.getByRole('complementary', { name: 'Source viewer' }).waitFor();
   await page.getByRole('button', { name: 'Close source viewer' }).click();
   console.log('PASS symbol filtering and declaration source navigation');
 
@@ -152,7 +158,7 @@ async function run() {
   assert(observed.some(item => item.endpoint === '/api/symbols/usages' && item.body.repositoryId === 'local-id'));
   const defButtons = page.getByRole('button', { name: 'Go to definition' });
   await defButtons.first().click();
-  await page.getByRole('dialog', { name: 'Source viewer' }).waitFor();
+  await page.getByRole('complementary', { name: 'Source viewer' }).waitFor();
   assert(observed.some(item => item.endpoint === '/api/symbols/definition' &&
     item.body.repositoryId === 'local-id' &&
     item.body.filePath === 'src/consumer.ts' &&
@@ -163,50 +169,51 @@ async function run() {
   // Ambiguous/unresolved definition shows explanatory message and does NOT open source viewer
   await defButtons.nth(1).click();
   await page.getByText('The declaration is not uniquely available in the prepared source scope.').waitFor();
-  assert.equal(await page.getByRole('dialog', { name: 'Source viewer' }).count(), 0);
+  assert.equal(await page.getByRole('complementary', { name: 'Source viewer' }).count(), 0);
   console.log('PASS ambiguous definition displays explanatory message and avoids navigating');
 
   // Pending definition response is discarded when repository changes
   await defButtons.nth(2).click(); // line 30: pauses 600ms
   // Switch repository before definition responds
+  await page.getByRole('button', { name: 'Switch repository' }).click();
   await page.getByRole('textbox', { name: 'Repository path' }).fill('/tmp/other-repo');
   await pause(750);
-  assert.equal(await page.getByRole('dialog', { name: 'Source viewer' }).count(), 0);
+  assert.equal(await page.getByRole('complementary', { name: 'Source viewer' }).count(), 0);
   // The usage panel container always exists in the new UI; verify no usage items are rendered
   assert.equal(await page.locator('.usage-item-card').count(), 0);
   console.log('PASS pending definition discarded on repository change');
 
   // Restore repository to continue checks — invalidateRepository() resets activeTab to 'overview'
   await page.getByRole('textbox', { name: 'Repository path' }).fill(LOCAL);
-  await page.getByRole('button', { name: 'Check Repository' }).click();
-  await page.getByText('Ready for Search').waitFor();
+  await page.getByRole('button', { name: 'Explore repository' }).click();
+  await workspaceNav().waitFor();
 
   // Long declaration spans must not exceed the source-view API's 500-line cap.
-  // Re-enter Symbols tab (repository change resets to overview)
+  // Re-enter Symbols through Explore (repository change resets to overview).
+  await page.getByRole('button', { name: 'Explore' }).click();
   await page.getByRole('button', { name: 'Symbols' }).click();
   await page.getByRole('textbox', { name: 'Filter symbols' }).fill('BigClass');
   await page.getByText('BigClass').last().click();
-  await page.getByRole('dialog', { name: 'Source viewer' }).waitFor();
+  await page.getByRole('complementary', { name: 'Source viewer' }).waitFor();
   assert(observed.some(item => item.endpoint === '/api/source' &&
     item.body.filePath === 'src/large.ts' &&
     item.body.startLine === 1 && item.body.endLine === 26));
   await page.getByRole('button', { name: 'Close source viewer' }).click();
   await page.getByRole('textbox', { name: 'Filter symbols' }).fill('');
   console.log('PASS large declaration opens within source-view line cap');
-  await page.getByRole('button', { name: 'Files' }).click();
+  await page.getByRole('button', { name: 'Explore' }).click();
   await page.getByRole('button', { name: /auth\.ts/ }).click();
-  await page.getByRole('dialog', { name: 'Source viewer' }).waitFor();
+  await page.getByRole('complementary', { name: 'Source viewer' }).waitFor();
   await page.getByRole('button', { name: 'Close source viewer' }).click();
   console.log('PASS repository navigator opens a listed file');
-  // Tab aria-label for search tab is 'AI / Semantic' in the new workspace header
-  await page.getByRole('button', { name: 'AI / Semantic' }).click();
+  await workspaceNav().getByRole('button', { name: 'Search' }).click();
   await page.getByRole('textbox', { name: 'Search query' }).fill('verifyToken');
-  await page.getByRole('button', { name: 'Search', exact: true }).click();
+  await submitSearch().click();
   await page.locator('.card').first().waitFor();
   assert.match(await page.locator('.card').first().innerText(), /auth\.ts/);
   assert(observed.some(item => item.endpoint === '/api/search' && item.body.repositoryId === 'local-id'));
   await page.getByRole('button', { name: 'View source for src/auth.ts' }).click();
-  await page.getByRole('dialog', { name: 'Source viewer' }).waitFor();
+  await page.getByRole('complementary', { name: 'Source viewer' }).waitFor();
   await page.locator('.sv-line--hl').first().waitFor();
   await page.getByRole('button', { name: 'Close source viewer' }).click();
   console.log('PASS local prepare, search and source inspection');
@@ -214,36 +221,36 @@ async function run() {
   await page.locator('.search-mode-tab[aria-label="Exact text"]').click();
   await page.getByRole('checkbox', { name: 'Whole word' }).check();
   await page.getByRole('textbox', { name: 'Search query' }).fill('verifyToken');
-  await page.getByRole('button', { name: 'Search', exact: true }).click();
+  await submitSearch().click();
   await page.locator('.exact-card').waitFor();
   assert.equal(await page.locator('.exact-highlight').count(), 2);
   assert(observed.some(item => item.endpoint === '/api/search/exact' && item.body.wholeWord === true));
   await page.getByRole('button', { name: 'View source for src/auth.ts line 3' }).click();
-  await page.getByRole('dialog', { name: 'Source viewer' }).waitFor();
+  await page.getByRole('complementary', { name: 'Source viewer' }).waitFor();
   await page.getByRole('button', { name: 'Close source viewer' }).click();
   await page.getByRole('textbox', { name: 'Search query' }).fill('banana');
-  await page.getByRole('button', { name: 'Search', exact: true }).click();
+  await submitSearch().click();
   await page.getByText('No exact text matches').waitFor();
   // A pending exact-search response must not lock the button or leak into
   // semantic mode. An option change must cancel the pending UI state too.
   await page.getByRole('textbox', { name: 'Search query' }).fill('slow exact');
-  await page.getByRole('button', { name: 'Search', exact: true }).click();
+  await submitSearch().click();
   // Click the search-mode toggle (not the workspace nav tab for the same label)
-  await page.locator('.search-mode-tab[aria-label="AI / Semantic"]').click();
-  assert.equal(await page.getByRole('button', { name: 'Search', exact: true }).isDisabled(), false);
+  await page.locator('.search-mode-tab[aria-label="By meaning"]').click();
+  assert.equal(await submitSearch().isDisabled(), false);
   await pause(750);
   assert.equal(await page.locator('.exact-card').count(), 0);
   assert.equal(await page.locator('.loading-notice').count(), 0);
   await page.locator('.search-mode-tab[aria-label="Exact text"]').click();
-  await page.getByRole('button', { name: 'Search', exact: true }).click();
+  await submitSearch().click();
   await page.getByRole('checkbox', { name: 'Whole word' }).uncheck();
-  assert.equal(await page.getByRole('button', { name: 'Search', exact: true }).isDisabled(), false);
+  assert.equal(await submitSearch().isDisabled(), false);
   assert.equal(await page.locator('.loading-notice').count(), 0);
-  await page.locator('.search-mode-tab[aria-label="AI / Semantic"]').click();
+  await page.locator('.search-mode-tab[aria-label="By meaning"]').click();
   console.log('PASS exact text mode highlights, pending-mode cancellation, options reset, and empty results');
 
   await page.getByRole('textbox', { name: 'Search query' }).fill('slow search');
-  await page.getByRole('button', { name: 'Search', exact: true }).click();
+  await submitSearch().click();
   await page.getByRole('textbox', { name: 'Search query' }).fill('new query while search is pending');
   await pause(750);
   assert.equal(await page.locator('.card').count(), 0);
@@ -251,23 +258,24 @@ async function run() {
   console.log('PASS editing query discards stale pending results');
 
   await page.getByRole('textbox', { name: 'Search query' }).fill('banana astrology');
-  await page.getByRole('button', { name: 'Search', exact: true }).click();
+  await submitSearch().click();
   await page.locator('.empty-state-title').waitFor();
   assert.equal(await page.locator('.card').count(), 0);
   console.log('PASS irrelevant query empty state');
 
-  await page.getByRole('button', { name: 'GitHub URL' }).click();
+  await page.getByRole('button', { name: 'Switch repository' }).click();
+  await page.getByRole('button', { name: 'GitHub repository' }).click();
   // Changing repository source invalidates the prepared repository and returns
   // the workspace to Overview. Search is deliberately unmounted until a new
   // repository has been prepared; its navigation action is locked meanwhile.
   assert.equal(await page.getByRole('textbox', { name: 'Search query' }).count(), 0);
-  assert.equal(await page.getByRole('button', { name: 'AI / Semantic' }).isDisabled(), true);
+  assert.equal(await page.getByRole('button', { name: 'Search' }).count(), 0);
   await page.getByRole('textbox', { name: 'Public GitHub repository URL' }).fill(GITHUB);
-  await page.getByRole('button', { name: 'Prepare repository' }).click();
-  await page.getByText('Ready for Search').waitFor();
-  await page.getByRole('button', { name: 'AI / Semantic' }).click();
+  await page.getByRole('button', { name: 'Explore repository' }).click();
+  await workspaceNav().waitFor();
+  await workspaceNav().getByRole('button', { name: 'Search' }).click();
   await page.getByRole('textbox', { name: 'Search query' }).fill('searchRepository');
-  await page.getByRole('button', { name: 'Search', exact: true }).click();
+  await submitSearch().click();
   await page.locator('.card').first().waitFor();
   const href = await page.getByRole('link', { name: 'Open on GitHub' }).getAttribute('href');
   assert.equal(href, GITHUB + '/blob/' + REVISION + '/src/search.ts#L12-L14');
@@ -275,6 +283,9 @@ async function run() {
   console.log('PASS GitHub prepare, search and pinned source link');
 
   await page.getByRole('button', { name: 'Refresh' }).click();
+  // Refresh errors live in the repository setup drawer, while the existing
+  // search evidence remains available in the workspace.
+  await page.getByRole('button', { name: 'Switch repository' }).click();
   await page.getByText('Temporary GitHub network failure').waitFor();
   assert.equal(await page.locator('.card').count(), 1);
   assert.equal(await page.getByRole('textbox', { name: 'Search query' }).isDisabled(), false);
@@ -283,7 +294,7 @@ async function run() {
   await page.getByRole('button', { name: 'Refresh' }).click();
   await page.locator('.card').first().waitFor({ state: 'detached' });
   assert.equal(await page.getByRole('textbox', { name: 'Search query' }).isDisabled(), false);
-  await page.getByRole('button', { name: 'Search', exact: true }).click();
+  await submitSearch().click();
   await page.locator('.card').first().waitFor();
   const updatedLink = await page.getByRole('link', { name: 'Open on GitHub' }).getAttribute('href');
   assert.equal(updatedLink, GITHUB + '/blob/' + UPDATED_REVISION + '/src/search.ts#L12-L14');
@@ -291,35 +302,37 @@ async function run() {
 
   await page.locator('.search-mode-tab[aria-label="Exact text"]').click();
   await page.getByRole('textbox', { name: 'Search query' }).fill('verifyToken');
-  await page.getByRole('button', { name: 'Search', exact: true }).click();
+  await submitSearch().click();
   await page.locator('.exact-card').waitFor();
   await page.getByRole('button', { name: 'Refresh' }).click();
   await page.locator('.exact-card').first().waitFor({ state: 'detached' });
   assert.equal(await page.locator('.exact-card').count(), 0);
   console.log('PASS successful GitHub refresh discards exact text matches');
 
-  await page.getByRole('button', { name: 'Local folder' }).click();
+  await page.getByRole('button', { name: 'Switch repository' }).click();
+  await page.getByRole('button', { name: 'Local repository' }).click();
   await page.getByRole('textbox', { name: 'Repository path' }).fill(LOCAL);
-  await page.getByRole('button', { name: 'Check Repository' }).click();
-  await page.getByText('Ready for Search').waitFor();
-  await page.getByRole('button', { name: 'AI / Semantic' }).click();
+  await page.getByRole('button', { name: 'Explore repository' }).click();
+  await workspaceNav().waitFor();
+  await workspaceNav().getByRole('button', { name: 'Search' }).click();
   await page.getByRole('textbox', { name: 'Search query' }).fill('slow search');
-  await page.getByRole('button', { name: 'Search', exact: true }).click();
-  await page.getByRole('button', { name: 'GitHub URL' }).click();
+  await submitSearch().click();
+  await page.getByRole('button', { name: 'Switch repository' }).click();
+  await page.getByRole('button', { name: 'GitHub repository' }).click();
   await pause(750);
   assert.equal(await page.locator('.card').count(), 0);
   assert.equal(await page.getByRole('textbox', { name: 'Search query' }).count(), 0);
-  assert.equal(await page.getByRole('button', { name: 'AI / Semantic' }).isDisabled(), true);
+  assert.equal(await page.getByRole('button', { name: 'Search' }).count(), 0);
   console.log('PASS stale search ignored on source switch');
 
-  await page.getByRole('button', { name: 'Local folder' }).click();
+  await page.getByRole('button', { name: 'Local repository' }).click();
   await page.getByRole('textbox', { name: 'Repository path' }).fill('/tmp/delayed');
-  await page.getByRole('button', { name: 'Check Repository' }).click();
-  await page.getByRole('button', { name: 'GitHub URL' }).click();
+  await page.getByRole('button', { name: 'Explore repository' }).click();
+  await page.getByRole('button', { name: 'GitHub repository' }).click();
   await pause(750);
   assert.equal(await page.getByRole('textbox', { name: 'Search query' }).count(), 0);
-  assert.equal(await page.getByRole('button', { name: 'AI / Semantic' }).isDisabled(), true);
-  assert.equal(await page.getByRole('button', { name: 'Prepare repository' }).isDisabled(), false);
+  assert.equal(await page.getByRole('button', { name: 'Search' }).count(), 0);
+  assert.equal(await page.getByRole('button', { name: 'Explore repository' }).isDisabled(), false);
   console.log('PASS stale preparation ignored and loading reset');
   assert.deepEqual(pageErrors, []);
   console.log('Browser smoke passed (mocked APIs only).');
