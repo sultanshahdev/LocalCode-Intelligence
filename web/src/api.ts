@@ -194,7 +194,7 @@ export async function apiRepoStatus(repositoryPath: string): Promise<RepoStatusR
   return post<RepoStatusResponse>('/repo/status', { repositoryPath });
 }
 
-export async function apiPrepareRepository(
+export async function nodeApiPrepareRepository(
   type: 'local' | 'github',
   value: string,
   refresh = false
@@ -202,7 +202,7 @@ export async function apiPrepareRepository(
   return post<PreparedRepositoryResponse>('/repositories/prepare', { source: { type, value }, refresh });
 }
 
-export async function apiSearch(
+export async function nodeApiSearch(
   query: string,
   repositoryPath: string,
   repositoryId?: string
@@ -210,7 +210,7 @@ export async function apiSearch(
   return post<SearchResponse>('/search', repositoryId ? { query, repositoryId } : { query, repositoryPath });
 }
 
-export async function apiExactSearch(
+export async function nodeApiExactSearch(
   query: string,
   repositoryPath: string,
   options: { caseSensitive: boolean; wholeWord: boolean },
@@ -222,7 +222,7 @@ export async function apiExactSearch(
   );
 }
 
-export async function apiSource(
+export async function nodeApiSource(
   repositoryPath: string,
   filePath: string,
   startLine: number,
@@ -238,7 +238,7 @@ export async function apiSource(
   );
 }
 
-export async function apiRepositoryFiles(
+export async function nodeApiRepositoryFiles(
   repositoryPath: string,
   repositoryId?: string
 ): Promise<RepositoryFilesResponse> {
@@ -248,7 +248,7 @@ export async function apiRepositoryFiles(
   );
 }
 
-export async function apiRepositoryMap(
+export async function nodeApiRepositoryMap(
   repositoryPath: string,
   repositoryId?: string
 ): Promise<RepositoryMapResponse> {
@@ -258,14 +258,14 @@ export async function apiRepositoryMap(
   );
 }
 
-export async function apiSymbols(
+export async function nodeApiSymbols(
   repositoryPath: string,
   repositoryId?: string
 ): Promise<SymbolsResponse> {
   return post<SymbolsResponse>('/symbols', repositoryId ? { repositoryId } : { repositoryPath });
 }
 
-export async function apiSymbolUsages(
+export async function nodeApiSymbolUsages(
   symbol: SourceSymbol,
   repositoryPath: string,
   repositoryId?: string
@@ -276,7 +276,7 @@ export async function apiSymbolUsages(
   );
 }
 
-export async function apiSymbolDefinition(
+export async function nodeApiSymbolDefinition(
   filePath: string,
   line: number,
   column: number,
@@ -288,3 +288,17 @@ export async function apiSymbolDefinition(
     repositoryId ? { repositoryId, filePath, line, column } : { repositoryPath, filePath, line, column }
   );
 }
+
+// The workspace deliberately speaks to this stable facade. Runtime selection is
+// made once, before the first operation; a real Node failure is never hidden by
+// falling back to a different engine mid-investigation.
+async function engine() { return (await import('./engine/detect-runtime')).getAnalysisEngine(); }
+export async function apiPrepareRepository(type: 'local' | 'github', value: string, refresh = false): Promise<PreparedRepositoryResponse> { return (await engine()).prepare(type, value, refresh); }
+export async function apiSearch(query: string, repositoryPath: string, repositoryId?: string): Promise<SearchResponse> { return (await engine()).search(query, repositoryPath, repositoryId); }
+export async function apiExactSearch(query: string, repositoryPath: string, options: { caseSensitive: boolean; wholeWord: boolean }, repositoryId?: string): Promise<ExactSearchResponse> { return (await engine()).exactSearch(query, repositoryPath, options, repositoryId); }
+export async function apiSource(repositoryPath: string, filePath: string, startLine: number, endLine: number, context = 25, repositoryId?: string): Promise<SourceResponse> { return (await engine()).source(repositoryPath, filePath, startLine, endLine, context, repositoryId); }
+export async function apiRepositoryFiles(repositoryPath: string, repositoryId?: string): Promise<RepositoryFilesResponse> { return (await engine()).files(repositoryPath, repositoryId); }
+export async function apiRepositoryMap(repositoryPath: string, repositoryId?: string): Promise<RepositoryMapResponse> { return (await engine()).map(repositoryPath, repositoryId); }
+export async function apiSymbols(repositoryPath: string, repositoryId?: string): Promise<SymbolsResponse> { return (await engine()).symbols(repositoryPath, repositoryId); }
+export async function apiSymbolUsages(symbol: SourceSymbol, repositoryPath: string, repositoryId?: string): Promise<UsagesResponse> { return (await engine()).usages(symbol, repositoryPath, repositoryId); }
+export async function apiSymbolDefinition(filePath: string, line: number, column: number, repositoryPath: string, repositoryId?: string): Promise<DefinitionResponse> { return (await engine()).definition(filePath, line, column, repositoryPath, repositoryId); }
