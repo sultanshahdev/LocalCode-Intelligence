@@ -160,7 +160,7 @@ export function SourceInspector({
         {loading && (
           <div className="inspector-state">
             <Spinner size={18} />
-            <span>Loading source from filesystem…</span>
+            <span>Loading source evidence…</span>
           </div>
         )}
 
